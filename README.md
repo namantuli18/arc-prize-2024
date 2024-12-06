@@ -1,4 +1,4 @@
-![image](https://github.com/user-attachments/assets/28ce6c85-74b3-4488-bdbf-02e110692c3a)
+![image](https://raw.githubusercontent.com/da-fr/arc-prize-2024/master/.github/overview.png)
 
 
 This repo contains the code we used for our Kaggle ARC Prize 2024 submission.
