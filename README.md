@@ -1,7 +1,7 @@
 ![image](https://raw.githubusercontent.com/da-fr/arc-prize-2024/master/.github/overview.png)
 
 
-This repo contains the code we used for our Kaggle ARC Prize 2024 submission.
+This repo contains the code we used for our Kaggle ARC Prize 2024 submission. For an in-depth overview of our method, please take a look at our [paper](the_architects.pdf).
 
 Under `training_code`, you can find our locally executable code that we used to prepare our models. The main entry points are named `run_finetuning_[model].py` for initial finetuning or `run_evaluation_[model].py` for starting an inference run with test-time-training, simulating a kaggle submission. In either case, we first load model and data, then augment our dataset. Afterwards a training run starts. In the latter case, the resulting model is evaluated using our augmentation and scoring strategies. Our training code requires the `unsloth` package and its dependencies to be installed. For evaluation, the `diskcache` package is required for caching the results of inference and score calculation.
 
