@@ -24,18 +24,6 @@
   },
   {
    "cell_type": "code",
-   "execution_count": null,
-   "id": "732a390b-52b6-4ba1-9c2a-f553d4f096ce",
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "# This notebook contains our winning submission to the ARC Prize 2024 Kaggle competition,\n",
-    "# scoring 53.5 points on the private evaluation set.\n",
-    "# the ARChitects (Daniel Franzen and Jan Disselhoff)"
-   ]
-  },
-  {
-   "cell_type": "code",
    "execution_count": 1,
    "id": "4f8908f8",
    "metadata": {
