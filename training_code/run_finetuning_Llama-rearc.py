@@ -70,7 +70,7 @@ for action in ['train', 'merge']:
 
     if action == 'train':
         # load training data
-        train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=172, sizes=[6], seed=42)
+        train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=396, sizes=[1], seed=42)
 
         # augment data set and transform to list (eventually removing examples to stay below the max. token count)
         train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
