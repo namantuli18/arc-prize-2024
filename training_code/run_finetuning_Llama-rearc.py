@@ -24,11 +24,11 @@ from model_tools import load_unsloth_4bit, keep_single_char_tokens, save_model_a
 from model_tools import load_peft_state, merge_peft_into_base
 
 # input paths
-base_model = 'chuanli11/Llama-3.2-1B-Instruct-uncensored'  # auto-downloaded from huggingface.co
+base_model = 'chuanli11/Llama-3.2-3B-Instruct-uncensored'  # auto-downloaded from huggingface.co
 re_arc_path = os.path.join('input', 're_arc')  # https://github.com/michaelhodel/re-arc
 
 # output paths
-save_model_path = os.path.join('pretrained_models', "Llama-3.2-1B-ReArc")
+save_model_path = os.path.join('pretrained_models', "Llama-3.2-3B-ReArc")
 
 for action in ['train', 'merge']:
     # continue if task already accomplished
