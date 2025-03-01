@@ -22,10 +22,12 @@ from arc_loader import ArcDataset
 from model_tools import InputMaskingDataCollator
 from model_tools import load_unsloth_4bit, keep_single_char_tokens, save_model_and_tokenizer
 from model_tools import load_peft_state, merge_peft_into_base
+from arc_downloader import download_arc_data
 
 # input paths
 base_model = 'nvidia/Mistral-NeMo-Minitron-8B-Base'  # auto-downloaded from huggingface.co
 arc_data_path = os.path.join('input', 'arc-prize-2024')  # as on kaggle arc prize 2024
+download_arc_data(arc_data_path)
 re_arc_path = os.path.join('input', 're_arc')  # https://github.com/michaelhodel/re-arc
 neoneye_path = os.path.join('input', 'arc-dataset-collection')  # https://github.com/neoneye/arc-dataset-collection
 
