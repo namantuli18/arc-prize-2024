@@ -89,7 +89,6 @@ def load_model_4bit(model_name_or_path):
     model = AutoModelForCausalLM.from_pretrained(
         model_name_or_path,
         quantization_config=bnb_config,
-        device_map="auto",  # Will be overridden by DeepSpeed
         trust_remote_code=True
     )
     
