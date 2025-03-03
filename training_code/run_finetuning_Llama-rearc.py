@@ -85,7 +85,8 @@ def load_model_4bit(model_name_or_path):
         else:
             tokenizer.add_special_tokens({'pad_token': '[PAD]'})
     
-    # Load model with quantization config
+    # Load model with quantization config but WITHOUT device_map
+    # Let DeepSpeed handle the device mapping
     model = AutoModelForCausalLM.from_pretrained(
         model_name_or_path,
         quantization_config=bnb_config,
@@ -143,9 +144,52 @@ def keep_single_char_tokens(model, tokenizer, keep=None, remove_unk=False):
     print(f"Reduced embedding matrix to {len(keep_indices)} tokens.")
     return keep_indices
 
+def load_tokenized_dataset(dataset_list, tokenizer, max_length=2048):
+    """
+    Properly tokenize a dataset from ArcDataset.as_list() format.
+    
+    The ArcDataset.as_list() returns examples with:
+    - 'text': full prompt with train examples and test query
+    - 'key': identifier for the problem
+    - 'train': formatted training examples
+    - 'query': formatted test query
+    - 'input': combined train+query
+    - 'reply': expected output
+    """
+    # First convert to a simple format with just text
+    simple_dataset = []
+    for item in dataset_list:
+        if isinstance(item, dict) and 'text' in item:
+            simple_dataset.append({'raw_text': item['text']})
+    
+    # Create dataset from simplified list
+    dataset = Dataset.from_list(simple_dataset)
+    
+    # Define tokenization function
+    def tokenize_function(examples):
+        return tokenizer(
+            examples['raw_text'],
+            padding=False,  # We'll handle padding in the data collator
+            truncation=True,
+            max_length=max_length,
+            return_tensors=None  # Return as list, not tensor
+        )
+    
+    # Tokenize the dataset
+    tokenized_dataset = dataset.map(
+        tokenize_function,
+        batched=True,
+        remove_columns=['raw_text'],
+        desc="Tokenizing texts"
+    )
+    
+    return tokenized_dataset
+
 class InputMaskingDataCollator:
     """
     Data collator that masks input tokens for training.
+    Handles the ARC format where we want to mask the instruction tokens
+    so the model only learns to predict the response.
     """
     def __init__(self, tokenizer, instruction_template="I", response_template="\n+/-=O", mlm=False, mask_first_n_examples=1):
         self.tokenizer = tokenizer
@@ -155,6 +199,11 @@ class InputMaskingDataCollator:
         self.mask_first_n_examples = mask_first_n_examples
     
     def __call__(self, features):
+        # Features should already have input_ids
+        if not isinstance(features, list) or len(features) == 0 or 'input_ids' not in features[0]:
+            raise ValueError("Features must be a list of dictionaries with 'input_ids'")
+            
+        # Pad the batch
         batch = self.tokenizer.pad(
             features,
             padding=True,
@@ -170,7 +219,7 @@ class InputMaskingDataCollator:
                 if i >= len(batch["input_ids"]):
                     continue
                     
-                # Convert IDs to text to find the response marker
+                # Convert IDs to text to find response marker
                 text = self.tokenizer.decode(batch["input_ids"][i])
                 
                 # Find position of instruction and response templates
@@ -297,6 +346,13 @@ for action in ['train', 'merge']:
         train_dataset_augment = train_dataset.augment(**train_aug_opts)
         train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
 
+        # Process and tokenize the dataset
+        train_dataset_tokenized = load_tokenized_dataset(
+            train_dataset_as_list, 
+            tokenizer, 
+            max_length=fmt_opts['max_tokens']
+        )
+        
         # Configure data collator
         tokenizer.padding_side = 'right'
         data_collator = InputMaskingDataCollator(
@@ -328,47 +384,19 @@ for action in ['train', 'merge']:
             remove_unused_columns=False,  # Prevent column filtering
         )
 
-        # Preprocess the training data to ensure proper format
-        def preprocess_function(examples):
-            # Convert the text to the format expected by the model
-            # Ensure inputs are tokenized if not already tokenized
-            if isinstance(examples, dict) and 'text' in examples:
-                text = examples['text']
-                # Tokenize the text
-                tokenized = tokenizer(
-                    text,
-                    padding="max_length",
-                    truncation=True,
-                    max_length=fmt_opts['max_tokens'],
-                    return_tensors=None  # Return as list, not tensor
-                )
-                return tokenized
-            return examples
-
-        # Process the dataset to ensure it has input_ids, attention_mask, etc.
-        train_dataset_processed = Dataset.from_list(train_dataset_as_list)
-        
-        # Apply preprocessing if the dataset doesn't have input_ids
-        if 'input_ids' not in train_dataset_processed.column_names:
-            train_dataset_processed = train_dataset_processed.map(
-                preprocess_function,
-                batched=False,
-                desc="Tokenizing texts",
-            )
-
         # Setup trainer
         trainer = Trainer(
             model=model,
             tokenizer=tokenizer,
-            train_dataset=train_dataset_processed,
+            train_dataset=train_dataset_tokenized,
             data_collator=data_collator,
             args=training_args,
         )
-
-        # Train
+        
+        # Train the model
         trainer.train()
         
-        # Save model
+        # Save the trained model
         save_model_and_tokenizer(f'{save_model_path}-lora', model, tokenizer)
 
     if action == 'merge':
