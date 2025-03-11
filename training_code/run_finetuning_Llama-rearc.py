@@ -19,7 +19,11 @@ from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model, Pe
 from datasets import Dataset
 
 from arc_loader import ArcDataset
-
+print(f"CUDA available: {torch.cuda.is_available()}")
+print(f"CUDA device count: {torch.cuda.device_count()}")
+print(f"Current CUDA device: {torch.cuda.current_device()}")
+print(f"CUDA memory allocated: {torch.cuda.memory_allocated() / 1e9} GB")
+print(f"CUDA memory reserved: {torch.cuda.memory_reserved() / 1e9} GB")
 # input paths
 base_model = 'chuanli11/Llama-3.2-3B-Instruct-uncensored'  # auto-downloaded from huggingface.co
 re_arc_path = os.path.join('input', 're_arc')  # https://github.com/michaelhodel/re-arc
@@ -102,46 +106,52 @@ def keep_single_char_tokens(model, tokenizer, keep=None, remove_unk=False):
     if keep is None:
         return
     
+    # Get the vocabulary and original embedding matrix
+    vocab = tokenizer.get_vocab()
+    orig_embeds = model.get_input_embeddings().weight.data
+    
     # Identify indices of tokens to keep
     keep_indices = []
     for token in keep:
         # Handle single characters
         if len(token) == 1:
-            indices = [i for i, t in enumerate(tokenizer.get_vocab().keys()) if token in t and len(t) == 1]
-            keep_indices.extend(indices)
+            for i, t in enumerate(vocab.keys()):
+                if token in t and len(t) == 1 and i < orig_embeds.shape[0]:
+                    keep_indices.append(i)
         else:
             # Handle multi-character tokens
             idx = tokenizer.convert_tokens_to_ids(token)
-            if idx != tokenizer.unk_token_id or not remove_unk:
+            if (idx != tokenizer.unk_token_id or not remove_unk) and idx < orig_embeds.shape[0]:
                 keep_indices.append(idx)
     
-    # Get unique indices
+    # Get unique indices and ensure they're all valid
     keep_indices = list(set(keep_indices))
+    keep_indices = [idx for idx in keep_indices if idx < orig_embeds.shape[0]]
     
-    # Resize embedding matrix (for LLaMA models)
-    if hasattr(model, "get_input_embeddings"):
-        orig_embeds = model.get_input_embeddings().weight.data
-        
-        # Create new embeddings only for tokens we want to keep
-        new_embeds = torch.zeros(
-            (len(keep_indices), orig_embeds.shape[1]),
-            dtype=orig_embeds.dtype,
-            device=orig_embeds.device
-        )
-        
-        # Copy the embeddings for tokens we want to keep
-        for i, idx in enumerate(keep_indices):
-            if idx < orig_embeds.shape[0]:  # Safety check
-                new_embeds[i] = orig_embeds[idx]
-        
-        # Update model's embeddings with our reduced set
-        model.get_input_embeddings().weight.data = new_embeds
-        
-        # Also update output embeddings if tied
-        if model.get_output_embeddings() is not None:
-            model.get_output_embeddings().weight.data = new_embeds
+    # If we're keeping all tokens, no need to resize
+    if len(keep_indices) == orig_embeds.shape[0]:
+        print("Keeping all embedding tokens, no reduction needed.")
+        return keep_indices
     
-    print(f"Reduced embedding matrix to {len(keep_indices)} tokens.")
+    print(f"Reducing embedding matrix from {orig_embeds.shape[0]} to {len(keep_indices)} tokens")
+    
+    # Create new embeddings dictionary
+    new_embeds_dict = {}
+    for i, idx in enumerate(keep_indices):
+        new_embeds_dict[idx] = i
+    
+    # Create mapping for tokenizer
+    # This is important for correctly mapping token IDs during training
+    tokenizer.add_special_tokens({'additional_special_tokens': [f'[UNUSED{i}]' for i in range(len(keep_indices))]})
+    
+    # Create a completely new embedding matrix
+    model.resize_token_embeddings(len(keep_indices))
+    
+    # Copy original embeddings to new ones
+    for old_idx, new_idx in new_embeds_dict.items():
+        model.get_input_embeddings().weight.data[new_idx] = orig_embeds[old_idx]
+        
+    print(f"Successfully reduced embedding matrix to {len(keep_indices)} tokens.")
     return keep_indices
 
 def load_tokenized_dataset(dataset_list, tokenizer, max_length=2048):
