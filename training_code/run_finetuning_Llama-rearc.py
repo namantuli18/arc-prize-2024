@@ -55,7 +55,7 @@ ds_config = {
     "gradient_accumulation_steps": 2,
     "gradient_clipping": 1.0,
     "steps_per_print": 10,
-    "train_micro_batch_size_per_gpu": 4,
+    "train_micro_batch_size_per_gpu": 1,
     "wall_clock_breakdown": False
 }
 
