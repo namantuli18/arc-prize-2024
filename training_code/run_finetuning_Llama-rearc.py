@@ -339,7 +339,7 @@ for action in ['train', 'merge']:
 
     if action == 'train':
         # load training data
-        train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=72, sizes=[6], seed=42)
+        train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=24, sizes=[6], seed=42)
 
         # augment data set and transform to list
         train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
@@ -365,7 +365,7 @@ for action in ['train', 'merge']:
 
         # Setup training arguments with DeepSpeed
         training_args = TrainingArguments(
-            per_device_train_batch_size=4,
+            per_device_train_batch_size=1,
             gradient_accumulation_steps=2,
             warmup_ratio=0.25,
             num_train_epochs=1,
