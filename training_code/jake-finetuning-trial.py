@@ -633,10 +633,13 @@ for action in ['train', 'merge']:
                 # Convert to list and limit size
                 train_dataset_list = train_dataset.as_list(len_name='text', **fmt_opts)
                 train_dataset_list = train_dataset_list[:TRIAL_SIZE]
-                # Create a new ArcDataset with limited data
+                # Create a new ArcDataset with limited data by limiting the keys
                 train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=2, sizes=[3], seed=42)
-                # Filter the dataset to only include the first TRIAL_SIZE examples
-                train_dataset.data = train_dataset.data[:TRIAL_SIZE]
+                # Limit the dataset by keeping only the first TRIAL_SIZE keys
+                train_dataset.keys = train_dataset.keys[:TRIAL_SIZE]
+                # Update challenge and solutions to only include the limited keys
+                train_dataset.challenge = {k: train_dataset.challenge[k] for k in train_dataset.keys}
+                train_dataset.solutions = {k: train_dataset.solutions[k] for k in train_dataset.keys if k in train_dataset.solutions}
             else:
                 train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=4, sizes=[6], seed=42)
 
