@@ -22,6 +22,7 @@ from datasets import Dataset
 import time
 import sys
 
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 # Add parent directory to path to import credentials
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
