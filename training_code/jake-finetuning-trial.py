@@ -22,11 +22,42 @@ from datasets import Dataset
 import time
 import sys
 
+# Set environment variables to avoid warnings
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"  # Helps with CUDA initialization issues
+
 # Add parent directory to path to import credentials
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from arc_loader import ArcDataset
+
+# Initialize CUDA and check availability
+def init_cuda():
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is not available. Please check your GPU installation.")
+    
+    # Set CUDA device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.cuda.set_device(device)
+    
+    # Print CUDA information
+    print(f"\n=== CUDA Information ===")
+    print(f"CUDA available: {torch.cuda.is_available()}")
+    print(f"CUDA device count: {torch.cuda.device_count()}")
+    print(f"Current CUDA device: {torch.cuda.current_device()}")
+    print(f"Device name: {torch.cuda.get_device_name()}")
+    print(f"CUDA version: {torch.version.cuda}")
+    print(f"PyTorch version: {torch.__version__}")
+    print("========================\n")
+    
+    return device
+
+# Initialize CUDA at startup
+try:
+    device = init_cuda()
+except RuntimeError as e:
+    print(f"Error initializing CUDA: {e}")
+    sys.exit(1)
 
 # Try importing wandb and credentials, but don't fail if not available
 try:
@@ -122,41 +153,33 @@ ds_config = {
     "wall_clock_breakdown": False
 }
 
-def load_model_4bit(model_name_or_path):
-    """
-    Load a model in 4-bit precision using bitsandbytes, ensuring DeepSpeed compatibility.
-    """
-    from transformers import BitsAndBytesConfig
-    
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
-        bnb_4bit_use_double_quant=True,
-    )
-    
-    # First load tokenizer to get correct padding token
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_name_or_path,
-        trust_remote_code=True
-    )
-    
-    # Ensure padding token exists
-    if tokenizer.pad_token is None:
-        if tokenizer.eos_token:
-            tokenizer.pad_token = tokenizer.eos_token
-        else:
-            tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-    
-    # Load model with quantization config but WITHOUT device_map
-    # Let DeepSpeed handle the device mapping
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name_or_path,
-        quantization_config=bnb_config,
-        trust_remote_code=True
-    )
-    
-    return model, tokenizer
+def load_model_4bit(model_name):
+    """Load model in 4-bit quantization with proper device handling."""
+    try:
+        # Load tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_name,
+            trust_remote_code=True,
+            use_fast=True
+        )
+        
+        # Load model with proper device handling
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            device_map="auto",  # Automatically handle device placement
+            load_in_4bit=True,
+            torch_dtype=torch.float16,
+            trust_remote_code=True,
+            low_cpu_mem_usage=True
+        )
+        
+        # Ensure model is on the correct device
+        model = model.to(device)
+        
+        return model, tokenizer
+    except Exception as e:
+        print(f"Error loading model: {e}")
+        raise
 
 def keep_single_char_tokens(model, tokenizer, keep=None, remove_unk=False):
     """
@@ -315,32 +338,39 @@ def setup_peft_model(model, r=256, lora_alpha=24, target_modules=None):
                         'gate_proj', 'up_proj', 'down_proj',
                         'embed_tokens', 'lm_head']
     
-    # Prepare the model for k-bit training
-    model = prepare_model_for_kbit_training(
-        model, 
-        use_gradient_checkpointing=True,
-        gradient_checkpointing_kwargs={"use_reentrant": False}  # Better compatibility with DeepSpeed
-    )
-    
-    # Define LoRA config optimized for DeepSpeed
-    lora_config = LoraConfig(
-        r=r,
-        lora_alpha=lora_alpha,
-        target_modules=target_modules,
-        lora_dropout=0,
-        bias="none",
-        task_type="CAUSAL_LM",
-        inference_mode=False,
-    )
-    
-    # Get PEFT model
-    model = get_peft_model(model, lora_config)
-    
-    # Enable gradient checkpointing for memory efficiency
-    if hasattr(model, "enable_input_require_grads"):
-        model.enable_input_require_grads()
-    
-    return model
+    try:
+        # Prepare the model for k-bit training
+        model = prepare_model_for_kbit_training(
+            model, 
+            use_gradient_checkpointing=True,
+            gradient_checkpointing_kwargs={"use_reentrant": False}
+        )
+        
+        # Define LoRA config optimized for DeepSpeed
+        lora_config = LoraConfig(
+            r=r,
+            lora_alpha=lora_alpha,
+            target_modules=target_modules,
+            lora_dropout=0,
+            bias="none",
+            task_type="CAUSAL_LM",
+            inference_mode=False,
+        )
+        
+        # Get PEFT model
+        model = get_peft_model(model, lora_config)
+        
+        # Enable gradient checkpointing for memory efficiency
+        if hasattr(model, "enable_input_require_grads"):
+            model.enable_input_require_grads()
+        
+        # Ensure model is on the correct device
+        model = model.to(device)
+        
+        return model
+    except Exception as e:
+        print(f"Error setting up PEFT model: {e}")
+        raise
 
 def save_model_and_tokenizer(save_path, model, tokenizer):
     """
@@ -419,130 +449,150 @@ class GPUMemoryCallback(TrainerCallback):
 
 # Main execution logic
 for action in ['train', 'merge']:
-    # continue if task already accomplished
-    if action == 'train' and os.path.exists(f'{save_model_path}-lora'):
-        continue
-    if action == 'merge' and os.path.exists(f'{save_model_path}-merged'):
-        continue
+    try:
+        # continue if task already accomplished
+        if action == 'train' and os.path.exists(f'{save_model_path}-lora'):
+            continue
+        if action == 'merge' and os.path.exists(f'{save_model_path}-merged'):
+            continue
 
-    # load base model & reduce embedding size
-    model = tokenizer = None  # free memory
-    model, tokenizer = load_model_4bit(base_model)
-    keep_tok = list('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?.:,;*+/-=')+tokenizer.tokenize('\n')
-    keep_single_char_tokens(model, tokenizer, keep=keep_tok, remove_unk=True)
-
-    # set formatting options
-    fmt_opts = dict(
-        preprompt='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjklmnpqrstuvwxyz',
-        query_beg='I',
-        reply_beg='\n+/-=O',
-        reply_end='\n' + tokenizer.eos_token,
-        lines_sep='\n',
-        max_tokens=128000,
-    )
-
-    # create lora model
-    lora_layers = ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj', 'embed_tokens', 'lm_head']
-    model = setup_peft_model(model, r=256, lora_alpha=24, target_modules=lora_layers)
-
-    if action == 'train':
-        # load training data
-        train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=4, sizes=[6], seed=42)
-
-        # augment data set and transform to list
-        train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
-        train_dataset_augment = train_dataset.augment(**train_aug_opts)
-        train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
-
-        # Process and tokenize the dataset
-        train_dataset_tokenized = load_tokenized_dataset(
-            train_dataset_as_list, 
-            tokenizer, 
-            max_length=fmt_opts['max_tokens']
-        )
+        # load base model & reduce embedding size
+        model = tokenizer = None  # free memory
+        torch.cuda.empty_cache()  # Clear GPU memory
         
-        # Configure data collator
-        tokenizer.padding_side = 'right'
-        data_collator = InputMaskingDataCollator(
-            instruction_template=fmt_opts['query_beg'],
-            response_template=fmt_opts['reply_beg'],
-            mlm=False,
-            tokenizer=tokenizer,
-            mask_first_n_examples=1,
+        print(f"\nLoading model for {action}...")
+        model, tokenizer = load_model_4bit(base_model)
+        
+        keep_tok = list('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?.:,;*+/-=')+tokenizer.tokenize('\n')
+        keep_single_char_tokens(model, tokenizer, keep=keep_tok, remove_unk=True)
+
+        # set formatting options
+        fmt_opts = dict(
+            preprompt='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjklmnpqrstuvwxyz',
+            query_beg='I',
+            reply_beg='\n+/-=O',
+            reply_end='\n' + tokenizer.eos_token,
+            lines_sep='\n',
+            max_tokens=128000,
         )
 
-        # Setup training arguments with DeepSpeed
-        training_args = TrainingArguments(
-            per_device_train_batch_size=1,
-            gradient_accumulation_steps=2,
-            warmup_ratio=0.25,
-            num_train_epochs=1,
-            learning_rate=1e-4,
-            fp16=not torch.cuda.is_bf16_supported(),
-            bf16=torch.cuda.is_bf16_supported(),
-            logging_steps=1,  # Log every step for better monitoring
-            logging_first_step=True,  # Log the first step
-            logging_nan_inf_filter=False,  # Log all metrics including NaN/Inf
-            optim="adamw_8bit",
-            weight_decay=0.00,
-            lr_scheduler_type='cosine',
-            seed=42,
-            output_dir='tmp_output',
-            save_strategy='no',
-            report_to=['wandb'] if USE_WANDB else 'none',  # Only enable wandb if configured
-            deepspeed=ds_config,  # Add DeepSpeed config here
-            remove_unused_columns=False,  # Prevent column filtering
-            # Add more detailed logging
-            logging_dir='logs',
-            logging_level='info',
-            # Add memory tracking
-            dataloader_pin_memory=True,
-            dataloader_num_workers=4,
-            # Add gradient tracking
-            gradient_checkpointing=True,
-            gradient_checkpointing_kwargs={"use_reentrant": False},
-        )
+        # create lora model
+        lora_layers = ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj', 'embed_tokens', 'lm_head']
+        model = setup_peft_model(model, r=256, lora_alpha=24, target_modules=lora_layers)
 
-        # Initialize wandb if available
-        if USE_WANDB:
-            wandb.init(
-                project="arc-prize-2024",
-                name=f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                config={
-                    "model_name": base_model,
-                    "learning_rate": 1e-4,
-                    "batch_size": 1,
-                    "gradient_accumulation_steps": 2,
-                    "warmup_ratio": 0.25,
-                    "num_train_epochs": 1,
-                    "lora_r": 256,
-                    "lora_alpha": 24,
-                    "target_modules": lora_layers,
-                }
+        if action == 'train':
+            print("\nLoading training data...")
+            # load training data
+            train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=4, sizes=[6], seed=42)
+
+            # augment data set and transform to list
+            train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
+            train_dataset_augment = train_dataset.augment(**train_aug_opts)
+            train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
+
+            # Process and tokenize the dataset
+            train_dataset_tokenized = load_tokenized_dataset(
+                train_dataset_as_list, 
+                tokenizer, 
+                max_length=fmt_opts['max_tokens']
+            )
+            
+            # Configure data collator
+            tokenizer.padding_side = 'right'
+            data_collator = InputMaskingDataCollator(
+                instruction_template=fmt_opts['query_beg'],
+                response_template=fmt_opts['reply_beg'],
+                mlm=False,
+                tokenizer=tokenizer,
+                mask_first_n_examples=1,
             )
 
-        # Setup trainer
-        trainer = Trainer(
-            model=model,
-            tokenizer=tokenizer,
-            train_dataset=train_dataset_tokenized,
-            data_collator=data_collator,
-            args=training_args,
-            callbacks=[GPUMemoryCallback()],  # Add our custom callback
-        )
-        
-        # Train the model
-        trainer.train()
-        
-        # Close wandb run if it was initialized
-        if USE_WANDB:
-            wandb.finish()
-        
-        # Save the trained model
-        save_model_and_tokenizer(f'{save_model_path}-lora', model, tokenizer)
+            # Setup training arguments with DeepSpeed
+            training_args = TrainingArguments(
+                per_device_train_batch_size=1,
+                gradient_accumulation_steps=2,
+                warmup_ratio=0.25,
+                num_train_epochs=1,
+                learning_rate=1e-4,
+                fp16=not torch.cuda.is_bf16_supported(),
+                bf16=torch.cuda.is_bf16_supported(),
+                logging_steps=1,
+                logging_first_step=True,
+                logging_nan_inf_filter=False,
+                optim="adamw_8bit",
+                weight_decay=0.00,
+                lr_scheduler_type='cosine',
+                seed=42,
+                output_dir='tmp_output',
+                save_strategy='no',
+                report_to=['wandb'] if USE_WANDB else 'none',
+                deepspeed=ds_config,
+                remove_unused_columns=False,
+                logging_dir='logs',
+                logging_level='info',
+                dataloader_pin_memory=True,
+                dataloader_num_workers=4,
+                gradient_checkpointing=True,
+                gradient_checkpointing_kwargs={"use_reentrant": False},
+                # Add device settings
+                no_cuda=False,
+                local_rank=-1,
+                device_map="auto",
+            )
 
-    if action == 'merge':
-        # load peft weights and merge
-        model = load_peft_state(model, f'{save_model_path}-lora')
-        model = merge_peft_into_base(model)
-        save_model_and_tokenizer(f'{save_model_path}-merged', model, tokenizer)
+            # Initialize wandb if available
+            if USE_WANDB:
+                wandb.init(
+                    project="arc-prize-2024",
+                    name=f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                    config={
+                        "model_name": base_model,
+                        "learning_rate": 1e-4,
+                        "batch_size": 1,
+                        "gradient_accumulation_steps": 2,
+                        "warmup_ratio": 0.25,
+                        "num_train_epochs": 1,
+                        "lora_r": 256,
+                        "lora_alpha": 24,
+                        "target_modules": lora_layers,
+                    }
+                )
+
+            # Setup trainer
+            trainer = Trainer(
+                model=model,
+                tokenizer=tokenizer,
+                train_dataset=train_dataset_tokenized,
+                data_collator=data_collator,
+                args=training_args,
+                callbacks=[GPUMemoryCallback()],
+            )
+            
+            print("\nStarting training...")
+            # Train the model
+            trainer.train()
+            
+            # Close wandb run if it was initialized
+            if USE_WANDB:
+                wandb.finish()
+            
+            # Save the trained model
+            save_model_and_tokenizer(f'{save_model_path}-lora', model, tokenizer)
+
+        if action == 'merge':
+            print("\nMerging PEFT weights...")
+            # load peft weights and merge
+            model = load_peft_state(model, f'{save_model_path}-lora')
+            model = merge_peft_into_base(model)
+            save_model_and_tokenizer(f'{save_model_path}-merged', model, tokenizer)
+            
+    except Exception as e:
+        print(f"\nError during {action}: {e}")
+        raise
+    finally:
+        # Clean up
+        if model is not None:
+            del model
+        if tokenizer is not None:
+            del tokenizer
+        torch.cuda.empty_cache()
