@@ -687,8 +687,7 @@ for action in ['train', 'merge']:
                 no_cuda=False,
                 local_rank=-1,
                 device_map="auto",
-                max_grad_norm=1.0,
-                label_names=["labels", "input_ids", "attention_mask"],  # Added all relevant label names
+                max_grad_norm=1.0
             )
 
             # Initialize wandb if available
