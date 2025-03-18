@@ -46,15 +46,16 @@ def load_model_4bit(model_name_or_path):
         else:
             tokenizer.add_special_tokens({'pad_token': '[PAD]'})
     
-    # Load model with 4-bit quantization
-    # device_map="auto" will distribute layers across all available GPUs automatically.
+
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+
     model = AutoModelForCausalLM.from_pretrained(
-        model_name_or_path,
-        quantization_config=bnb_config,
-        trust_remote_code=True,
-        device_map="auto"  # Let HF handle multi-GPU layer placement automatically
-    )
-    
+            model_name_or_path,
+            quantization_config=bnb_config,
+            trust_remote_code=True,
+            device_map={"": local_rank}  # Force the model onto the current GPU
+        )
+        
     return model, tokenizer
 
 
