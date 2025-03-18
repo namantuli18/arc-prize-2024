@@ -629,8 +629,11 @@ for action in ['train', 'merge']:
             if TRIAL_RUN:
                 print(f"Running trial with {TRIAL_SIZE} examples...")
                 train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=2, sizes=[3], seed=42)
-                # Limit dataset size
-                train_dataset = train_dataset.select(range(min(TRIAL_SIZE, len(train_dataset))))
+                # Convert to list and limit size
+                train_dataset_list = train_dataset.as_list(len_name='text', **fmt_opts)
+                train_dataset_list = train_dataset_list[:TRIAL_SIZE]
+                # Convert back to ArcDataset
+                train_dataset = ArcDataset.from_list(train_dataset_list)
             else:
                 train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=4, sizes=[6], seed=42)
 
