@@ -115,6 +115,10 @@ re_arc_path = os.path.join('input', 're_arc')  # https://github.com/michaelhodel
 # output paths
 save_model_path = os.path.join('pretrained_models', "Llama-3.2-3B-ReArc")
 
+# Trial run settings
+TRIAL_RUN = True  # Set to True for trial run
+TRIAL_SIZE = 10  # Number of examples for trial run
+
 # Check if wandb is configured
 USE_WANDB = WANDB_AVAILABLE and os.getenv('WANDB_API_KEY') is not None
 if USE_WANDB:
@@ -622,8 +626,14 @@ for action in ['train', 'merge']:
 
         if action == 'train':
             print("\nLoading training data...")
-            # load training data
-            train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=4, sizes=[6], seed=42)
+            # load training data with smaller size for trial run
+            if TRIAL_RUN:
+                print(f"Running trial with {TRIAL_SIZE} examples...")
+                train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=2, sizes=[3], seed=42)
+                # Limit dataset size
+                train_dataset = train_dataset.select(range(min(TRIAL_SIZE, len(train_dataset))))
+            else:
+                train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=4, sizes=[6], seed=42)
 
             # augment data set and transform to list
             train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
@@ -650,7 +660,7 @@ for action in ['train', 'merge']:
             # Setup training arguments with DeepSpeed
             training_args = TrainingArguments(
                 per_device_train_batch_size=1,
-                gradient_accumulation_steps=4,  # Increased from 2
+                gradient_accumulation_steps=4,
                 warmup_ratio=0.25,
                 num_train_epochs=1,
                 learning_rate=1e-4,
@@ -671,21 +681,21 @@ for action in ['train', 'merge']:
                 logging_dir='logs',
                 logging_level='info',
                 dataloader_pin_memory=True,
-                dataloader_num_workers=0,  # Reduced from 4 to avoid tokenizer parallelism issues
+                dataloader_num_workers=0,
                 gradient_checkpointing=True,
                 gradient_checkpointing_kwargs={"use_reentrant": False},
                 no_cuda=False,
                 local_rank=-1,
                 device_map="auto",
-                max_grad_norm=1.0,  # Added explicit gradient clipping
-                label_names=["labels"],  # Added explicit label names
+                max_grad_norm=1.0,
+                label_names=["labels", "input_ids", "attention_mask"],  # Added all relevant label names
             )
 
             # Initialize wandb if available
             if USE_WANDB:
                 wandb.init(
                     project="arc-prize-2024",
-                    name=f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                    name=f"trial_training_{datetime.now().strftime('%Y%m%d_%H%M%S')}" if TRIAL_RUN else f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
                     config={
                         "model_name": base_model,
                         "learning_rate": 1e-4,
@@ -696,6 +706,8 @@ for action in ['train', 'merge']:
                         "lora_r": 256,
                         "lora_alpha": 24,
                         "target_modules": lora_layers,
+                        "trial_run": TRIAL_RUN,
+                        "trial_size": TRIAL_SIZE if TRIAL_RUN else "full",
                     }
                 )
 
