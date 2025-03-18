@@ -695,7 +695,6 @@ for action in ['train', 'merge']:
                 gradient_checkpointing_kwargs={"use_reentrant": False},
                 no_cuda=False,
                 local_rank=-1,
-                device_map="auto",
                 max_grad_norm=1.0
             )
 
