@@ -4,10 +4,9 @@ from unsloth import UnslothTrainer as Trainer, unsloth_train, is_bfloat16_suppor
 from unsloth import UnslothTrainingArguments as TrainingArguments
 from datasets import Dataset
 
-# Add these imports for Accelerate + DeepSpeed
+# Add these imports for Accelerate
 import json
 from accelerate import Accelerator
-from accelerate.utils import DeepSpeedPlugin
 
 from arc_loader import ArcDataset
 from model_tools import InputMaskingDataCollator
@@ -25,7 +24,7 @@ save_model_path = os.path.join('pretrained_models', "Llama-3.2-3B-ReArc")
 
 # Create DeepSpeed configuration file
 ds_config = {
-    "train_batch_size": 4,  # This will be per GPU
+    "train_micro_batch_size_per_gpu": 4,
     "gradient_accumulation_steps": 2,
     "optimizer": {
         "type": "AdamW",
@@ -104,7 +103,7 @@ for action in ['train', 'merge']:
 
     if action == 'train':
         # load training data
-        train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=72, sizes=[6], seed=42)
+        train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=368, sizes=[6], seed=42)
 
         # augment data set and transform to list (eventually removing examples to stay below the max. token count)
         train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
@@ -115,10 +114,31 @@ for action in ['train', 'merge']:
         FastLanguageModel.for_training(model)
         tokenizer.padding_side = 'right'
         
-        # Initialize the accelerator with DeepSpeed
-        ds_plugin = DeepSpeedPlugin(zero_stage=2, config_file_path="configs/ds_config.json")
-        accelerator = Accelerator(deepspeed_plugin=ds_plugin)
+        # Create training arguments with DeepSpeed config
+        training_args = TrainingArguments(
+            per_device_train_batch_size=4,
+            gradient_accumulation_steps=2,
+            warmup_ratio=0.25,
+            num_train_epochs=1,
+            learning_rate=1e-4,
+            embedding_learning_rate=1e-5,
+            fp16=not is_bfloat16_supported(),
+            bf16=is_bfloat16_supported(),
+            logging_steps=10,
+            optim="adamw_8bit",
+            weight_decay=0.00,
+            lr_scheduler_type='cosine',
+            seed=42,
+            output_dir='tmp_output',
+            save_strategy='no',
+            report_to='none',
+            # Add DeepSpeed configuration
+            deepspeed="configs/ds_config.json",
+            # Add distributed training settings
+            local_rank=int(os.environ.get("LOCAL_RANK", -1)),
+        )
         
+        # Initialize trainer
         trainer = Trainer(
             model=model,
             tokenizer=tokenizer,
@@ -133,53 +153,27 @@ for action in ['train', 'merge']:
                 tokenizer=tokenizer,
                 mask_first_n_examples=1,
             ),
-            args=TrainingArguments(
-                per_device_train_batch_size=4,
-                gradient_accumulation_steps=2,
-                warmup_ratio=0.25,
-                num_train_epochs=1,
-                learning_rate=1e-4,
-                embedding_learning_rate=1e-5,
-                fp16=not is_bfloat16_supported(),
-                bf16=is_bfloat16_supported(),
-                logging_steps=10,
-                optim="adamw_8bit",
-                weight_decay=0.00,
-                lr_scheduler_type='cosine',
-                seed=42,
-                output_dir='tmp_output',
-                save_strategy='no',
-                report_to='none',
-                # Add DeepSpeed configuration
-                deepspeed="configs/ds_config.json",
-                # Add distributed training settings
-                local_rank=int(os.environ.get("LOCAL_RANK", -1)),
-            ),
+            args=training_args,
         )
         
-        # Use the accelerator to prepare your trainer components
-        trainer.model, trainer.optimizer = accelerator.prepare(
-            trainer.model, trainer.create_optimizer()
-        )
-        
+        # Train the model
         trainer_stats = unsloth_train(trainer)
         
-        # Save model (ensure this works with distributed training)
-        if accelerator.is_main_process:
-            save_model_and_tokenizer(f'{save_model_path}-lora', accelerator.unwrap_model(model), tokenizer)
+        # Save model after training
+        # Get local_rank to determine if this is the main process
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        # Save only from the main process (rank 0)
+        if local_rank == 0:
+            save_model_and_tokenizer(f'{save_model_path}-lora', model, tokenizer)
 
     if action == 'merge':
-        # Initialize accelerator for the merge process too
-        ds_plugin = DeepSpeedPlugin(zero_stage=2)
-        accelerator = Accelerator(deepspeed_plugin=ds_plugin)
-        
-        # Wrap the model
-        model = accelerator.prepare(model)
+        # Get local_rank to determine if this is the main process
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
         
         # load peft weights and merge
-        load_peft_state(accelerator.unwrap_model(model), f'{save_model_path}-lora')
-        model = merge_peft_into_base(accelerator.unwrap_model(model))
+        load_peft_state(model, f'{save_model_path}-lora')
+        model = merge_peft_into_base(model)
         
-        # Save only from the main process
-        if accelerator.is_main_process:
+        # Save only from the main process (rank 0)
+        if local_rank == 0:
             save_model_and_tokenizer(f'{save_model_path}-merged', model, tokenizer)
