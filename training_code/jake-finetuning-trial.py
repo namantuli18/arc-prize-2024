@@ -148,9 +148,36 @@ ds_config = {
     },
     "gradient_accumulation_steps": 2,
     "gradient_clipping": 1.0,
-    "steps_per_print": 10,
+    "steps_per_print": 1,  # Print more frequently
     "train_micro_batch_size_per_gpu": 1,
-    "wall_clock_breakdown": False
+    "wall_clock_breakdown": True,  # Enable detailed timing breakdown
+    "flops_profiler": {  # Enable FLOPS profiling
+        "enabled": True,
+        "profile_step": 1,
+        "module_depth": -1,
+        "top_modules": 3,
+        "detailed": True,
+        "output_file": "flops_profiler.log"
+    },
+    "monitor": {  # Enable DeepSpeed monitoring
+        "enabled": True,
+        "tensorboard": {
+            "enabled": True,
+            "output_path": "tensorboard_logs",
+            "job_name": "arc_training"
+        },
+        "wandb": {
+            "enabled": True,
+            "project": "arc-prize-2024",
+            "team": None,
+            "group": "deepseed_training"
+        },
+        "csv": {
+            "enabled": True,
+            "output_path": "deepspeed_logs",
+            "job_name": "arc_training"
+        }
+    }
 }
 
 def load_model_4bit(model_name):
@@ -447,6 +474,98 @@ class GPUMemoryCallback(TrainerCallback):
         print(f"Total training time: {total_time:.2f} seconds")
         print_system_info()
 
+class DeepSpeedMonitorCallback(TrainerCallback):
+    """Callback to monitor DeepSpeed training progress and metrics."""
+    def __init__(self):
+        self.start_time = None
+        self.last_log_time = None
+        self.log_interval = 30  # Log every 30 seconds
+        self.initialized = False
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        self.start_time = time.time()
+        self.last_log_time = self.start_time
+        print("\n=== DeepSpeed Training Started ===")
+        print(f"DeepSpeed config: {args.deepspeed}")
+        print_system_info()
+        
+        # Create log directories
+        os.makedirs("deepspeed_logs", exist_ok=True)
+        os.makedirs("tensorboard_logs", exist_ok=True)
+        
+        self.initialized = True
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if not self.initialized:
+            return
+            
+        current_time = time.time()
+        if current_time - self.last_log_time >= self.log_interval:
+            self.last_log_time = current_time
+            elapsed_time = current_time - self.start_time
+            
+            # Get DeepSpeed engine if available
+            if hasattr(kwargs.get('model', None), 'engine'):
+                engine = kwargs['model'].engine
+                
+                # Log DeepSpeed metrics
+                metrics = {
+                    "step": state.global_step,
+                    "time_elapsed": elapsed_time,
+                    "loss": state.log_history[-1].get("loss", 0) if state.log_history else 0,
+                    "learning_rate": state.log_history[-1].get("learning_rate", 0) if state.log_history else 0,
+                    "gpu_memory_allocated": torch.cuda.memory_allocated() / 1e9,
+                    "gpu_memory_reserved": torch.cuda.memory_reserved() / 1e9,
+                    "system_memory_used": psutil.virtual_memory().used / 1e9,
+                    "system_memory_total": psutil.virtual_memory().total / 1e9,
+                }
+                
+                # Add DeepSpeed-specific metrics if available
+                if hasattr(engine, 'optimizer'):
+                    optimizer = engine.optimizer
+                    if hasattr(optimizer, 'cur_scale'):
+                        metrics['loss_scale'] = optimizer.cur_scale
+                    if hasattr(optimizer, 'overflow'):
+                        metrics['gradient_overflow'] = optimizer.overflow
+                
+                # Print metrics
+                print("\n=== DeepSpeed Training Progress ===")
+                print(f"Step: {metrics['step']}")
+                print(f"Loss: {metrics['loss']:.4f}")
+                print(f"Learning Rate: {metrics['learning_rate']:.2e}")
+                print(f"Time Elapsed: {metrics['time_elapsed']:.2f}s")
+                print("\n=== Memory Usage ===")
+                print(f"GPU Memory: {metrics['gpu_memory_allocated']:.2f}/{metrics['gpu_memory_reserved']:.2f} GB")
+                print(f"System Memory: {metrics['system_memory_used']:.2f}/{metrics['system_memory_total']:.2f} GB")
+                print("==============================\n")
+                
+                # Log to wandb if available
+                if USE_WANDB and wandb.run is not None:
+                    wandb.log(metrics)
+                
+                # Save metrics to CSV
+                csv_path = os.path.join("deepspeed_logs", "training_metrics.csv")
+                if not os.path.exists(csv_path):
+                    with open(csv_path, 'w') as f:
+                        f.write(",".join(metrics.keys()) + "\n")
+                with open(csv_path, 'a') as f:
+                    f.write(",".join(str(v) for v in metrics.values()) + "\n")
+
+    def on_train_end(self, args, state, control, **kwargs):
+        total_time = time.time() - self.start_time
+        print("\n=== DeepSpeed Training Complete ===")
+        print(f"Total training time: {total_time:.2f} seconds")
+        print(f"Final loss: {state.log_history[-1].get('loss', 0) if state.log_history else 0}")
+        print_system_info()
+        
+        # Save final metrics
+        if USE_WANDB and wandb.run is not None:
+            wandb.log({
+                "final_loss": state.log_history[-1].get('loss', 0) if state.log_history else 0,
+                "total_training_time": total_time,
+                "total_steps": state.global_step
+            })
+
 # Main execution logic
 for action in ['train', 'merge']:
     try:
@@ -565,7 +684,7 @@ for action in ['train', 'merge']:
                 train_dataset=train_dataset_tokenized,
                 data_collator=data_collator,
                 args=training_args,
-                callbacks=[GPUMemoryCallback()],
+                callbacks=[GPUMemoryCallback(), DeepSpeedMonitorCallback()],  # Add both callbacks
             )
             
             print("\nStarting training...")
