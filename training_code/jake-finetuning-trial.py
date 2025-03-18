@@ -25,6 +25,10 @@ import sys
 # Set environment variables to avoid warnings
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"  # Helps with CUDA initialization issues
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"  # Limit memory splits
+os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"  # Limit CUDA connections
+os.environ["NCCL_DEBUG"] = "INFO"  # Enable NCCL debugging
+os.environ["NCCL_IB_DISABLE"] = "1"  # Disable InfiniBand for better stability
 
 # Add parent directory to path to import credentials
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -133,25 +137,28 @@ ds_config = {
         "stage": 3,  # Stage 3 for maximum memory efficiency
         "offload_optimizer": {
             "device": "cpu",
-            "pin_memory": True
+            "pin_memory": True,
+            "fast_init": True
         },
         "offload_param": {
             "device": "cpu",
-            "pin_memory": True
+            "pin_memory": True,
+            "fast_init": True
         },
         "overlap_comm": True,
         "contiguous_gradients": True,
-        "reduce_bucket_size": "auto",
-        "stage3_prefetch_bucket_size": "auto",
-        "stage3_param_persistence_threshold": "auto",
-        "stage3_gather_16bit_weights_on_model_save": True
+        "reduce_bucket_size": 5e7,  # Reduced from auto
+        "stage3_prefetch_bucket_size": 5e7,  # Reduced from auto
+        "stage3_param_persistence_threshold": 1e6,  # Reduced from auto
+        "stage3_gather_16bit_weights_on_model_save": True,
+        "round_robin_gradients": True
     },
-    "gradient_accumulation_steps": 2,
+    "gradient_accumulation_steps": 4,  # Increased from 2
     "gradient_clipping": 1.0,
-    "steps_per_print": 1,  # Print more frequently
+    "steps_per_print": 1,
     "train_micro_batch_size_per_gpu": 1,
-    "wall_clock_breakdown": True,  # Enable detailed timing breakdown
-    "flops_profiler": {  # Enable FLOPS profiling
+    "wall_clock_breakdown": True,
+    "flops_profiler": {
         "enabled": True,
         "profile_step": 1,
         "module_depth": -1,
@@ -159,7 +166,7 @@ ds_config = {
         "detailed": True,
         "output_file": "flops_profiler.log"
     },
-    "monitor": {  # Enable DeepSpeed monitoring
+    "monitor": {
         "enabled": True,
         "tensorboard": {
             "enabled": True,
@@ -177,7 +184,10 @@ ds_config = {
             "output_path": "deepspeed_logs",
             "job_name": "arc_training"
         }
-    }
+    },
+    "memory_breakdown": True,  # Enable memory breakdown
+    "zero_allow_untested_optimizer": True,  # Allow untested optimizers
+    "zero_force_ds_checkpoint_optimizer_state_shard": True  # Force optimizer state sharding
 }
 
 def load_model_4bit(model_name):
@@ -187,7 +197,8 @@ def load_model_4bit(model_name):
         tokenizer = AutoTokenizer.from_pretrained(
             model_name,
             trust_remote_code=True,
-            use_fast=True
+            use_fast=True,
+            padding_side='right'  # Ensure consistent padding
         )
         
         # Load model with proper device handling
@@ -197,11 +208,21 @@ def load_model_4bit(model_name):
             load_in_4bit=True,
             torch_dtype=torch.float16,
             trust_remote_code=True,
-            low_cpu_mem_usage=True
+            low_cpu_mem_usage=True,
+            use_cache=False,  # Disable KV cache for training
+            max_memory={0: "12GB"},  # Limit GPU memory usage
+            offload_folder="offload",  # Enable offloading
+            offload_state_dict=True,  # Enable state dict offloading
         )
         
         # Ensure model is on the correct device
         model = model.to(device)
+        
+        # Enable gradient checkpointing
+        model.gradient_checkpointing_enable()
+        
+        # Clear CUDA cache
+        torch.cuda.empty_cache()
         
         return model, tokenizer
     except Exception as e:
@@ -629,7 +650,7 @@ for action in ['train', 'merge']:
             # Setup training arguments with DeepSpeed
             training_args = TrainingArguments(
                 per_device_train_batch_size=1,
-                gradient_accumulation_steps=2,
+                gradient_accumulation_steps=4,  # Increased from 2
                 warmup_ratio=0.25,
                 num_train_epochs=1,
                 learning_rate=1e-4,
@@ -650,13 +671,14 @@ for action in ['train', 'merge']:
                 logging_dir='logs',
                 logging_level='info',
                 dataloader_pin_memory=True,
-                dataloader_num_workers=4,
+                dataloader_num_workers=0,  # Reduced from 4 to avoid tokenizer parallelism issues
                 gradient_checkpointing=True,
                 gradient_checkpointing_kwargs={"use_reentrant": False},
-                # Add device settings
                 no_cuda=False,
                 local_rank=-1,
                 device_map="auto",
+                max_grad_norm=1.0,  # Added explicit gradient clipping
+                label_names=["labels"],  # Added explicit label names
             )
 
             # Initialize wandb if available
@@ -668,7 +690,7 @@ for action in ['train', 'merge']:
                         "model_name": base_model,
                         "learning_rate": 1e-4,
                         "batch_size": 1,
-                        "gradient_accumulation_steps": 2,
+                        "gradient_accumulation_steps": 4,
                         "warmup_ratio": 0.25,
                         "num_train_epochs": 1,
                         "lora_r": 256,
