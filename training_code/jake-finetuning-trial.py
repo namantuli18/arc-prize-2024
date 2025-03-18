@@ -637,6 +637,8 @@ for action in ['train', 'merge']:
                 train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=2, sizes=[3], seed=42)
                 # Limit the dataset by keeping only the first TRIAL_SIZE keys
                 train_dataset.keys = train_dataset.keys[:TRIAL_SIZE]
+                # Convert numpy string keys to regular Python strings
+                train_dataset.keys = [str(k) for k in train_dataset.keys]
                 # Update challenge and solutions to only include the limited keys
                 train_dataset.challenge = {k: train_dataset.challenge[k] for k in train_dataset.keys}
                 train_dataset.solutions = {k: train_dataset.solutions[k] for k in train_dataset.keys if k in train_dataset.solutions}
