@@ -104,7 +104,7 @@ for action in ['train', 'merge']:
 
     if action == 'train':
         # load training data
-        train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=368, sizes=[6], seed=42)
+        train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=72, sizes=[6], seed=42)
 
         # augment data set and transform to list (eventually removing examples to stay below the max. token count)
         train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
@@ -116,7 +116,8 @@ for action in ['train', 'merge']:
         tokenizer.padding_side = 'right'
         
         # Initialize the accelerator with DeepSpeed
-        accelerator = Accelerator(deepspeed_plugin=DeepSpeedPlugin(config="configs/ds_config.json"))
+        ds_plugin = DeepSpeedPlugin(zero_stage=2, config_file_path="configs/ds_config.json")
+        accelerator = Accelerator(deepspeed_plugin=ds_plugin)
         
         trainer = Trainer(
             model=model,
@@ -169,7 +170,8 @@ for action in ['train', 'merge']:
 
     if action == 'merge':
         # Initialize accelerator for the merge process too
-        accelerator = Accelerator()
+        ds_plugin = DeepSpeedPlugin(zero_stage=2)
+        accelerator = Accelerator(deepspeed_plugin=ds_plugin)
         
         # Wrap the model
         model = accelerator.prepare(model)
