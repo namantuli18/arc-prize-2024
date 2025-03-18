@@ -302,20 +302,16 @@ def keep_single_char_tokens(model, tokenizer, keep=None, remove_unk=False):
 def load_tokenized_dataset(dataset_list, tokenizer, max_length=2048):
     """
     Properly tokenize a dataset from ArcDataset.as_list() format.
-    
-    The ArcDataset.as_list() returns examples with:
-    - 'text': full prompt with train examples and test query
-    - 'key': identifier for the problem
-    - 'train': formatted training examples
-    - 'query': formatted test query
-    - 'input': combined train+query
-    - 'reply': expected output
     """
+    print(f"\nLoading dataset with {len(dataset_list)} examples...")
+    
     # First convert to a simple format with just text
     simple_dataset = []
     for item in dataset_list:
         if isinstance(item, dict) and 'text' in item:
             simple_dataset.append({'raw_text': item['text']})
+    
+    print(f"Converted {len(simple_dataset)} examples to simple format")
     
     # Create dataset from simplified list
     dataset = Dataset.from_list(simple_dataset)
@@ -331,6 +327,7 @@ def load_tokenized_dataset(dataset_list, tokenizer, max_length=2048):
         )
     
     # Tokenize the dataset
+    print("Tokenizing dataset...")
     tokenized_dataset = dataset.map(
         tokenize_function,
         batched=True,
@@ -338,13 +335,14 @@ def load_tokenized_dataset(dataset_list, tokenizer, max_length=2048):
         desc="Tokenizing texts"
     )
     
+    print(f"Dataset tokenized. Features: {tokenized_dataset.features}")
+    print(f"Dataset size: {len(tokenized_dataset)}")
+    
     return tokenized_dataset
 
 class InputMaskingDataCollator:
     """
     Data collator that masks input tokens for training.
-    Handles the ARC format where we want to mask the instruction tokens
-    so the model only learns to predict the response.
     """
     def __init__(self, tokenizer, instruction_template="I", response_template="\n+/-=O", mlm=False, mask_first_n_examples=1):
         self.tokenizer = tokenizer
@@ -352,12 +350,17 @@ class InputMaskingDataCollator:
         self.response_template = response_template
         self.mlm = mlm
         self.mask_first_n_examples = mask_first_n_examples
+        print(f"\nInitialized InputMaskingDataCollator with:")
+        print(f"Instruction template: '{instruction_template}'")
+        print(f"Response template: '{response_template}'")
     
     def __call__(self, features):
         # Features should already have input_ids
         if not isinstance(features, list) or len(features) == 0 or 'input_ids' not in features[0]:
             raise ValueError("Features must be a list of dictionaries with 'input_ids'")
-            
+        
+        print(f"\nProcessing batch of {len(features)} examples")
+        
         # Pad the batch
         batch = self.tokenizer.pad(
             features,
@@ -389,6 +392,11 @@ class InputMaskingDataCollator:
                     # Mask out labels for the instruction part (set to -100)
                     if 0 <= instr_token_pos < resp_token_pos < batch["labels"][i].shape[0]:
                         batch["labels"][i, instr_token_pos:resp_token_pos] = -100
+        
+        print(f"Batch shapes:")
+        print(f"input_ids: {batch['input_ids'].shape}")
+        print(f"attention_mask: {batch['attention_mask'].shape}")
+        print(f"labels: {batch['labels'].shape}")
         
         return batch
 
@@ -732,16 +740,20 @@ for action in ['train', 'merge']:
                 )
 
             # Setup trainer
+            print("\nSetting up trainer...")
             trainer = Trainer(
                 model=model,
                 tokenizer=tokenizer,
                 train_dataset=train_dataset_tokenized,
                 data_collator=data_collator,
                 args=training_args,
-                callbacks=[GPUMemoryCallback(), DeepSpeedMonitorCallback()],  # Add both callbacks
+                callbacks=[GPUMemoryCallback(), DeepSpeedMonitorCallback()],
             )
             
             print("\nStarting training...")
+            print(f"Dataset size: {len(train_dataset_tokenized)}")
+            print(f"Training arguments: {training_args}")
+            
             # Train the model
             trainer.train()
             
