@@ -1,16 +1,42 @@
 import os
 import torch
+import torch.distributed as dist
 from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments
 from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model, PeftModel
 from datasets import Dataset
 
 from arc_loader import ArcDataset
 
-print(f"CUDA available: {torch.cuda.is_available()}")
-print(f"CUDA device count: {torch.cuda.device_count()}")
-print(f"Current CUDA device: {torch.cuda.current_device()}")
-print(f"CUDA memory allocated: {torch.cuda.memory_allocated() / 1e9} GB")
-print(f"CUDA memory reserved: {torch.cuda.memory_reserved() / 1e9} GB")
+# Set tokenizers parallelism to False to avoid deadlocks
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+# Get local rank for distributed training
+local_rank = int(os.environ.get("LOCAL_RANK", 0))
+world_size = int(os.environ.get("WORLD_SIZE", 1))
+
+# Set the device
+device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
+
+# Initialize process group only when doing distributed training
+if world_size > 1:
+    # Use the SLURM environment variables to determine addresses if available
+    if 'SLURM_PROCID' in os.environ:
+        rank = int(os.environ.get('SLURM_PROCID'))
+        local_rank = int(os.environ.get('SLURM_LOCALID'))
+        world_size = int(os.environ.get('SLURM_NTASKS'))
+        
+    # Initialize process group
+    dist.init_process_group(backend="nccl")
+    torch.cuda.set_device(local_rank)
+
+# Print system info only from rank 0
+if local_rank == 0:
+    print(f"CUDA available: {torch.cuda.is_available()}")
+    print(f"CUDA device count: {torch.cuda.device_count()}")
+    print(f"Current CUDA device: {torch.cuda.current_device()}")
+    print(f"CUDA memory allocated: {torch.cuda.memory_allocated() / 1e9} GB")
+    print(f"CUDA memory reserved: {torch.cuda.memory_reserved() / 1e9} GB")
+    print(f"Using {world_size} GPUs with local_rank: {local_rank}")
 
 # input paths
 base_model = 'chuanli11/Llama-3.2-3B-Instruct-uncensored'  # auto-downloaded from huggingface.co
@@ -20,18 +46,12 @@ re_arc_path = os.path.join('input', 're_arc')  # https://github.com/michaelhodel
 save_model_path = os.path.join('pretrained_models', "Llama-3.2-3B-ReArc")
 
 
-def load_model_4bit(model_name_or_path):
+def load_model_4bit(model_name_or_path, device_map=None):
     """
     Load a model in 4-bit precision using bitsandbytes.
+    Modified to support better DDP compatibility.
     """
     from transformers import BitsAndBytesConfig
-    
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
-        bnb_4bit_use_double_quant=True,
-    )
     
     # First load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
@@ -46,15 +66,31 @@ def load_model_4bit(model_name_or_path):
         else:
             tokenizer.add_special_tokens({'pad_token': '[PAD]'})
     
+    # Special handling for DDP with 4-bit models:
+    # 1. We use a simpler quantization config
+    # 2. We avoid double quantization
+    # 3. We ensure proper compute dtype
+    compute_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=compute_dtype,
+        bnb_4bit_use_double_quant=False,  # Must be False for DDP with 4-bit models
+    )
 
-    local_rank = int(os.environ.get("LOCAL_RANK", 0))
-
+    # For 4-bit models with DDP, each process must handle its own GPU
+    if device_map is None:
+        device_map = {"": local_rank}
+    
+    # Load model with specific configuration for DDP compatibility
     model = AutoModelForCausalLM.from_pretrained(
-            model_name_or_path,
-            quantization_config=bnb_config,
-            trust_remote_code=True,
-            device_map={"": local_rank}  # Force the model onto the current GPU
-        )
+        model_name_or_path,
+        quantization_config=bnb_config,
+        trust_remote_code=True,
+        device_map=device_map,
+        torch_dtype=compute_dtype,
+    )
         
     return model, tokenizer
 
@@ -88,10 +124,12 @@ def keep_single_char_tokens(model, tokenizer, keep=None, remove_unk=False):
     
     # If we're keeping all tokens, no need to resize
     if len(keep_indices) == orig_embeds.shape[0]:
-        print("Keeping all embedding tokens, no reduction needed.")
+        if local_rank == 0:
+            print("Keeping all embedding tokens, no reduction needed.")
         return keep_indices
     
-    print(f"Reducing embedding matrix from {orig_embeds.shape[0]} to {len(keep_indices)} tokens")
+    if local_rank == 0:
+        print(f"Reducing embedding matrix from {orig_embeds.shape[0]} to {len(keep_indices)} tokens")
     
     new_embeds_dict = {}
     for i, idx in enumerate(keep_indices):
@@ -107,7 +145,8 @@ def keep_single_char_tokens(model, tokenizer, keep=None, remove_unk=False):
     for old_idx, new_idx in new_embeds_dict.items():
         model.get_input_embeddings().weight.data[new_idx] = orig_embeds[old_idx]
         
-    print(f"Successfully reduced embedding matrix to {len(keep_indices)} tokens.")
+    if local_rank == 0:
+        print(f"Successfully reduced embedding matrix to {len(keep_indices)} tokens.")
     return keep_indices
 
 
@@ -190,6 +229,7 @@ class InputMaskingDataCollator:
 def setup_peft_model(model, r=256, lora_alpha=24, target_modules=None):
     """
     Setup a model for PEFT training (LoRA).
+    Modified for better DDP compatibility.
     """
     if target_modules is None:
         target_modules = [
@@ -198,12 +238,19 @@ def setup_peft_model(model, r=256, lora_alpha=24, target_modules=None):
             'embed_tokens', 'lm_head'
         ]
     
+    # Prepare model for k-bit training with specific settings for DDP
+    # The critical setting here is use_reentrant=False which prevents 
+    # issues with backward pass synchronization in DDP
     model = prepare_model_for_kbit_training(
         model,
         use_gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False}
     )
     
+    # Configure LoRA with DDP-friendly settings
+    # Specific things that help with DDP:
+    # - No dropout (more deterministic across ranks)
+    # - No bias parameters (fewer parameters to sync)
     lora_config = LoraConfig(
         r=r,
         lora_alpha=lora_alpha,
@@ -214,8 +261,11 @@ def setup_peft_model(model, r=256, lora_alpha=24, target_modules=None):
         inference_mode=False,
     )
     
+    # Apply PEFT to the model
     model = get_peft_model(model, lora_config)
     
+    # Critical for PEFT models with DDP - ensures that input gradients
+    # are properly calculated and synchronized across GPUs
     if hasattr(model, "enable_input_require_grads"):
         model.enable_input_require_grads()
     
@@ -223,6 +273,10 @@ def setup_peft_model(model, r=256, lora_alpha=24, target_modules=None):
 
 
 def save_model_and_tokenizer(save_path, model, tokenizer):
+    # Only save from rank 0
+    if local_rank != 0:
+        return
+        
     os.makedirs(save_path, exist_ok=True)
     model.save_pretrained(save_path)
     tokenizer.save_pretrained(save_path)
@@ -243,103 +297,184 @@ def merge_peft_into_base(model):
 
 
 if __name__ == "__main__":
-    # We cycle through 'train' and then 'merge'
-    for action in ['train', 'merge']:
-        # If LoRA or merged model already exists, skip
-        if action == 'train' and os.path.exists(f'{save_model_path}-lora'):
-            continue
-        if action == 'merge' and os.path.exists(f'{save_model_path}-merged'):
-            continue
+    try:
+        # Initial barrier to ensure all processes start together
+        if world_size > 1:
+            torch.distributed.barrier()
+            
+        if local_rank == 0:
+            print(f"Starting distributed training with {world_size} processes")
+            
+        # We cycle through 'train' and then 'merge'
+        for action in ['train', 'merge']:
+            # Skip completed steps (but only check on rank 0)
+            skip_action = False
+            if local_rank == 0:
+                if action == 'train' and os.path.exists(f'{save_model_path}-lora'):
+                    print(f"LoRA model already exists at {save_model_path}-lora, skipping training")
+                    skip_action = True
+                if action == 'merge' and os.path.exists(f'{save_model_path}-merged'):
+                    print(f"Merged model already exists at {save_model_path}-merged, skipping merge")
+                    skip_action = True
+            
+            # Broadcast skip_action decision from rank 0 to all ranks
+            if world_size > 1:
+                skip_action_tensor = torch.tensor([1 if skip_action else 0], device=device)
+                torch.distributed.broadcast(skip_action_tensor, src=0)
+                skip_action = bool(skip_action_tensor.item())
+                torch.distributed.barrier()
+                
+            if skip_action:
+                continue
 
-        # Load base model & reduce embedding size
-        model, tokenizer = load_model_4bit(base_model)
-        keep_tok = list(
-            'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?.:,;*+/-='
-        ) + tokenizer.tokenize('\n')
-        keep_single_char_tokens(model, tokenizer, keep=keep_tok, remove_unk=True)
+            if local_rank == 0:
+                print(f"Starting {action} phase")
+                
+            # Load base model
+            model, tokenizer = load_model_4bit(base_model)
+            
+            # Define tokens to keep
+            keep_tok = list(
+                'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?.:,;*+/-='
+            ) + tokenizer.tokenize('\n')
+            
+            # Synchronize after model loading
+            if world_size > 1:
+                torch.distributed.barrier()
+                
+            # Reduce embedding size
+            keep_single_char_tokens(model, tokenizer, keep=keep_tok, remove_unk=True)
 
-        # Formatting options
-        fmt_opts = dict(
-            preprompt='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjklmnpqrstuvwxyz',
-            query_beg='I',
-            reply_beg='\n+/-=O',
-            reply_end='\n' + tokenizer.eos_token,
-            lines_sep='\n',
-            max_tokens=128000,
-        )
-
-        # Set up LoRA
-        lora_layers = [
-            'q_proj', 'k_proj', 'v_proj', 'o_proj',
-            'gate_proj', 'up_proj', 'down_proj',
-            'embed_tokens', 'lm_head'
-        ]
-        model = setup_peft_model(model, r=256, lora_alpha=24, target_modules=lora_layers)
-
-        if action == 'train':
-            # Load training data
-            train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=4, sizes=[6], seed=42)
-            train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
-            train_dataset_augment = train_dataset.augment(**train_aug_opts)
-            train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
-
-            # Tokenize dataset
-            train_dataset_tokenized = load_tokenized_dataset(
-                train_dataset_as_list,
-                tokenizer,
-                max_length=fmt_opts['max_tokens']
+            # Formatting options
+            fmt_opts = dict(
+                preprompt='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjklmnpqrstuvwxyz',
+                query_beg='I',
+                reply_beg='\n+/-=O',
+                reply_end='\n' + tokenizer.eos_token,
+                lines_sep='\n',
+                max_tokens=128000,
             )
 
-            # Data collator
-            tokenizer.padding_side = 'right'
-            data_collator = InputMaskingDataCollator(
-                instruction_template=fmt_opts['query_beg'],
-                response_template=fmt_opts['reply_beg'],
-                mlm=False,
-                tokenizer=tokenizer,
-                mask_first_n_examples=1,
-            )
+            # Set up LoRA
+            lora_layers = [
+                'q_proj', 'k_proj', 'v_proj', 'o_proj',
+                'gate_proj', 'up_proj', 'down_proj',
+                'embed_tokens', 'lm_head'
+            ]
+            
+            model = setup_peft_model(model, r=256, lora_alpha=24, target_modules=lora_layers)
+            
+            # Synchronize after model preparation
+            if world_size > 1:
+                torch.distributed.barrier()
 
-            # Training arguments WITHOUT DeepSpeed
-            training_args = TrainingArguments(
-                per_device_train_batch_size=1,
-                gradient_accumulation_steps=2,
-                warmup_ratio=0.25,
-                num_train_epochs=1,
-                learning_rate=1e-4,
-                fp16=not torch.cuda.is_bf16_supported(),
-                bf16=torch.cuda.is_bf16_supported(),
-                logging_steps=10,
-                optim="adamw_8bit",
-                weight_decay=0.00,
-                lr_scheduler_type='cosine',
-                seed=42,
-                output_dir='tmp_output',
-                save_strategy='no',
-                report_to='none',
-                # If you have gradient checkpointing, you can disable
-                # DDP's find_unused_parameters for efficiency:
-                ddp_find_unused_parameters=False,
-                remove_unused_columns=False,
-            )
+            if action == 'train':
+                # Load and prepare training data
+                if local_rank == 0:
+                    print("Loading training data")
+                    
+                # Load training data
+                train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=4, sizes=[6], seed=42)
+                train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
+                train_dataset_augment = train_dataset.augment(**train_aug_opts)
+                train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
 
-            # Set up Trainer
-            trainer = Trainer(
-                model=model,
-                tokenizer=tokenizer,
-                train_dataset=train_dataset_tokenized,
-                data_collator=data_collator,
-                args=training_args,
-            )
+                # Tokenize dataset
+                train_dataset_tokenized = load_tokenized_dataset(
+                    train_dataset_as_list,
+                    tokenizer,
+                    max_length=fmt_opts['max_tokens']
+                )
 
-            # Train
-            trainer.train()
+                # Data collator
+                tokenizer.padding_side = 'right'
+                data_collator = InputMaskingDataCollator(
+                    instruction_template=fmt_opts['query_beg'],
+                    response_template=fmt_opts['reply_beg'],
+                    mlm=False,
+                    tokenizer=tokenizer,
+                    mask_first_n_examples=1,
+                )
 
-            # Save LoRA model
-            save_model_and_tokenizer(f'{save_model_path}-lora', model, tokenizer)
+                # Training arguments with proper DDP settings
+                training_args = TrainingArguments(
+                    per_device_train_batch_size=1,
+                    gradient_accumulation_steps=2,
+                    warmup_ratio=0.25,
+                    num_train_epochs=1,
+                    learning_rate=1e-4,
+                    fp16=not torch.cuda.is_bf16_supported(),
+                    bf16=torch.cuda.is_bf16_supported(),
+                    logging_steps=10,
+                    # Use PyTorch's native AdamW for better DDP compatibility
+                    optim="adamw_torch",  
+                    weight_decay=0.00,
+                    lr_scheduler_type='cosine',
+                    seed=42,
+                    output_dir='tmp_output',
+                    save_strategy='no',
+                    report_to='none',
+                    # Critical for PEFT models with DDP
+                    ddp_find_unused_parameters=True, 
+                    remove_unused_columns=False,
+                    # DDP-specific optimizations
+                    ddp_bucket_cap_mb=25,
+                    dataloader_pin_memory=False,
+                    # Set proper local_rank for distributed
+                    local_rank=local_rank,
+                    # Disable default DDP plugin for better compatibility with quantized models
+                    ddp_backend="no_c10d",
+                )
+                
+                if local_rank == 0:
+                    print("Setting up trainer")
 
-        if action == 'merge':
-            # Merge LoRA weights into base
-            model = load_peft_state(model, f'{save_model_path}-lora')
-            model = merge_peft_into_base(model)
-            save_model_and_tokenizer(f'{save_model_path}-merged', model, tokenizer)
+                # Set up Trainer
+                trainer = Trainer(
+                    model=model,
+                    tokenizer=tokenizer,
+                    train_dataset=train_dataset_tokenized,
+                    data_collator=data_collator,
+                    args=training_args,
+                )
+                
+                if local_rank == 0:
+                    print("Starting training")
+
+                # Train the model
+                trainer.train()
+
+                # Synchronize after training
+                if world_size > 1:
+                    torch.distributed.barrier()
+                    
+                # Save model (only rank 0 will actually save)
+                save_model_and_tokenizer(f'{save_model_path}-lora', model, tokenizer)
+
+            if action == 'merge':
+                # Only merge on rank 0 to avoid conflicts
+                if local_rank == 0:
+                    print("Starting merge process")
+                    # Merge LoRA weights into base
+                    model = load_peft_state(model, f'{save_model_path}-lora')
+                    model = merge_peft_into_base(model)
+                    save_model_and_tokenizer(f'{save_model_path}-merged', model, tokenizer)
+                    print("Merge completed successfully")
+                
+                # Synchronize after merge
+                if world_size > 1:
+                    torch.distributed.barrier()
+                    
+        if local_rank == 0:
+            print("All operations completed successfully")
+                    
+    except Exception as e:
+        # Print any exceptions for debugging
+        print(f"Process {local_rank} encountered an exception: {e}")
+        import traceback
+        traceback.print_exc()
+        
+    finally:
+        # Always clean up the process group
+        if world_size > 1:
+            dist.destroy_process_group()
