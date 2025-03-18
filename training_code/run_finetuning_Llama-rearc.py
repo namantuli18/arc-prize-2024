@@ -1,12 +1,22 @@
+# Copyright 2024 Daniel Franzen and Jan Disselhoff
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import os
 from unsloth import FastLanguageModel
 from unsloth import UnslothTrainer as Trainer, unsloth_train, is_bfloat16_supported
 from unsloth import UnslothTrainingArguments as TrainingArguments
 from datasets import Dataset
-
-# Add these imports for Accelerate
-import json
-from accelerate import Accelerator
 
 from arc_loader import ArcDataset
 from model_tools import InputMaskingDataCollator
@@ -17,51 +27,10 @@ from arc_downloader import download_arc_data
 # input paths
 base_model = 'chuanli11/Llama-3.2-3B-Instruct-uncensored'  # auto-downloaded from huggingface.co
 re_arc_path = os.path.join('input', 're_arc')  # https://github.com/michaelhodel/re-arc
-download_arc_data(re_arc_path)  # Fixed variable name
+download_arc_data(arc_data_path)
 
 # output paths
 save_model_path = os.path.join('pretrained_models', "Llama-3.2-3B-ReArc")
-
-# Create DeepSpeed configuration file
-ds_config = {
-    "train_micro_batch_size_per_gpu": 4,
-    "gradient_accumulation_steps": 2,
-    "optimizer": {
-        "type": "AdamW",
-        "params": {
-            "lr": 1e-4,
-            "weight_decay": 0.0
-        }
-    },
-    "scheduler": {
-        "type": "WarmupLR",
-        "params": {
-            "warmup_min_lr": 0,
-            "warmup_max_lr": 1e-4,
-            "warmup_num_steps": "auto"
-        }
-    },
-    "fp16": {
-        "enabled": not is_bfloat16_supported()
-    },
-    "bf16": {
-        "enabled": is_bfloat16_supported()
-    },
-    "zero_optimization": {
-        "stage": 2,
-        "offload_optimizer": {
-            "device": "cpu",
-            "pin_memory": True
-        },
-        "contiguous_gradients": True,
-        "overlap_comm": True
-    }
-}
-
-# Save the config to a file
-os.makedirs('configs', exist_ok=True)
-with open('configs/ds_config.json', 'w') as f:
-    json.dump(ds_config, f, indent=4)
 
 for action in ['train', 'merge']:
     # continue if task already accomplished
@@ -110,35 +79,10 @@ for action in ['train', 'merge']:
         train_dataset_augment = train_dataset.augment(**train_aug_opts)
         train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
 
+
         # run training
         FastLanguageModel.for_training(model)
         tokenizer.padding_side = 'right'
-        
-        # Create training arguments with DeepSpeed config
-        training_args = TrainingArguments(
-            per_device_train_batch_size=4,
-            gradient_accumulation_steps=2,
-            warmup_ratio=0.25,
-            num_train_epochs=1,
-            learning_rate=1e-4,
-            embedding_learning_rate=1e-5,
-            fp16=not is_bfloat16_supported(),
-            bf16=is_bfloat16_supported(),
-            logging_steps=10,
-            optim="adamw_8bit",
-            weight_decay=0.00,
-            lr_scheduler_type='cosine',
-            seed=42,
-            output_dir='tmp_output',
-            save_strategy='no',
-            report_to='none',
-            # Add DeepSpeed configuration
-            deepspeed="configs/ds_config.json",
-            # Add distributed training settings
-            local_rank=int(os.environ.get("LOCAL_RANK", -1)),
-        )
-        
-        # Initialize trainer
         trainer = Trainer(
             model=model,
             tokenizer=tokenizer,
@@ -153,27 +97,30 @@ for action in ['train', 'merge']:
                 tokenizer=tokenizer,
                 mask_first_n_examples=1,
             ),
-            args=training_args,
+            args=TrainingArguments(
+                per_device_train_batch_size=4,
+                gradient_accumulation_steps=2,
+                warmup_ratio=0.25,
+                num_train_epochs=1,
+                learning_rate=1e-4,
+                embedding_learning_rate=1e-5,
+                fp16=not is_bfloat16_supported(),
+                bf16=is_bfloat16_supported(),
+                logging_steps=10,
+                optim="adamw_8bit",
+                weight_decay=0.00,
+                lr_scheduler_type='cosine',
+                seed=42,
+                output_dir='tmp_output',
+                save_strategy='no',
+                report_to='none',
+            ),
         )
-        
-        # Train the model
         trainer_stats = unsloth_train(trainer)
-        
-        # Save model after training
-        # Get local_rank to determine if this is the main process
-        local_rank = int(os.environ.get("LOCAL_RANK", 0))
-        # Save only from the main process (rank 0)
-        if local_rank == 0:
-            save_model_and_tokenizer(f'{save_model_path}-lora', model, tokenizer)
+        save_model_and_tokenizer(f'{save_model_path}-lora', model, tokenizer)
 
     if action == 'merge':
-        # Get local_rank to determine if this is the main process
-        local_rank = int(os.environ.get("LOCAL_RANK", 0))
-        
         # load peft weights and merge
         load_peft_state(model, f'{save_model_path}-lora')
         model = merge_peft_into_base(model)
-        
-        # Save only from the main process (rank 0)
-        if local_rank == 0:
-            save_model_and_tokenizer(f'{save_model_path}-merged', model, tokenizer)
+        save_model_and_tokenizer(f'{save_model_path}-merged', model, tokenizer)
