@@ -689,7 +689,6 @@ for action in ['train', 'merge']:
                 deepspeed=ds_config,
                 remove_unused_columns=False,
                 logging_dir='logs',
-                logging_level='info',
                 dataloader_pin_memory=True,
                 dataloader_num_workers=0,
                 gradient_checkpointing=True,
