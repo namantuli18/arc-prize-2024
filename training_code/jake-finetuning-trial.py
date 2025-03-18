@@ -40,21 +40,20 @@ def init_cuda():
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is not available. Please check your GPU installation.")
     
-    # Set CUDA device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    torch.cuda.set_device(device)
+    # Get the current device index
+    current_device = torch.cuda.current_device()
     
     # Print CUDA information
     print(f"\n=== CUDA Information ===")
     print(f"CUDA available: {torch.cuda.is_available()}")
     print(f"CUDA device count: {torch.cuda.device_count()}")
-    print(f"Current CUDA device: {torch.cuda.current_device()}")
-    print(f"Device name: {torch.cuda.get_device_name()}")
+    print(f"Current CUDA device: {current_device}")
+    print(f"Device name: {torch.cuda.get_device_name(current_device)}")
     print(f"CUDA version: {torch.version.cuda}")
     print(f"PyTorch version: {torch.__version__}")
     print("========================\n")
     
-    return device
+    return current_device
 
 # Initialize CUDA at startup
 try:
