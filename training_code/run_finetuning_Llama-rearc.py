@@ -100,11 +100,14 @@ for action in ['train', 'merge']:
         # -------------------------
         # Distributed Training: DDP
         # -------------------------
+        model.to(local_rank)
+
+        # Wrap in DistributedDataParallel
         model = torch.nn.parallel.DistributedDataParallel(
             model,
             device_ids=[local_rank],
             output_device=local_rank,
-            find_unused_parameters=False,  # Set to True if there are unused params
+            find_unused_parameters=False,
         )
 
         trainer = Trainer(
