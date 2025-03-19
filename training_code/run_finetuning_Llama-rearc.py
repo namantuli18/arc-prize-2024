@@ -1,19 +1,20 @@
 import os
+import json
+import torch
 from unsloth import FastLanguageModel
 from unsloth import UnslothTrainer as Trainer, is_bfloat16_supported
 from unsloth import UnslothTrainingArguments as TrainingArguments
 from datasets import Dataset
-
-# Add these imports for Accelerate
-import json
-from accelerate import Accelerator
-from accelerate.utils import DummyOptim, DummyScheduler
 
 from arc_loader import ArcDataset
 from model_tools import InputMaskingDataCollator
 from model_tools import load_unsloth_4bit, keep_single_char_tokens, save_model_and_tokenizer
 from model_tools import load_peft_state, merge_peft_into_base
 from arc_downloader import download_arc_data
+
+# Detect number of GPUs available
+num_gpus = torch.cuda.device_count()
+print(f"Number of GPUs detected: {num_gpus}")
 
 # input paths
 base_model = 'chuanli11/Llama-3.2-3B-Instruct-uncensored'  # auto-downloaded from huggingface.co
@@ -23,7 +24,7 @@ download_arc_data(re_arc_path)
 # output paths
 save_model_path = os.path.join('pretrained_models', "Llama-3.2-3B-ReArc")
 
-# Create DeepSpeed configuration file WITH optimizer settings
+# Create DeepSpeed configuration file
 ds_config = {
     "train_micro_batch_size_per_gpu": 4,
     "gradient_accumulation_steps": 2,
@@ -31,6 +32,8 @@ ds_config = {
         "type": "AdamW",
         "params": {
             "lr": 1e-4,
+            "betas": [0.9, 0.999],
+            "eps": 1e-8,
             "weight_decay": 0.0
         }
     },
@@ -115,15 +118,7 @@ for action in ['train', 'merge']:
         FastLanguageModel.for_training(model)
         tokenizer.padding_side = 'right'
         
-        # Initialize the accelerator
-        accelerator = Accelerator()
-        
-        # Create proper DummyOptim for DeepSpeed
-        dummy_optimizer = DummyOptim(params=model.parameters())
-        # Also need a dummy scheduler
-        dummy_scheduler = DummyScheduler(dummy_optimizer)
-        
-        # Create training arguments without deepspeed config
+        # Create training arguments with DeepSpeed enabled
         training_args = TrainingArguments(
             per_device_train_batch_size=4,
             gradient_accumulation_steps=2,
@@ -134,20 +129,21 @@ for action in ['train', 'merge']:
             fp16=not is_bfloat16_supported(),
             bf16=is_bfloat16_supported(),
             logging_steps=10,
-            # Don't specify optimizer here since we're using DummyOptim
-            # optim="adamw_8bit",
+            # Let DeepSpeed handle the optimizer
+            optim=None,
             weight_decay=0.00,
             lr_scheduler_type='cosine',
             seed=42,
             output_dir='tmp_output',
             save_strategy='no',
             report_to='none',
-            # Add DeepSpeed configuration
+            # DeepSpeed config
             deepspeed="configs/ds_config.json",
-            # Add distributed training settings
+            # Required for distributed training
             local_rank=int(os.environ.get("LOCAL_RANK", -1)),
         )
         
+        # Create the trainer
         trainer = Trainer(
             model=model,
             tokenizer=tokenizer,
@@ -165,36 +161,26 @@ for action in ['train', 'merge']:
             args=training_args,
         )
         
-        # Don't create the optimizer through the trainer
-        # Instead, use our dummy optimizer and scheduler
-        trainer.optimizer = dummy_optimizer
-        trainer.lr_scheduler = dummy_scheduler
+        # Train the model directly with DeepSpeed handled by Trainer
+        trainer.train()
         
-        # Use the accelerator to prepare the model, optimizer and scheduler
-        trainer.model, trainer.optimizer, trainer.lr_scheduler = accelerator.prepare(
-            trainer.model, trainer.optimizer, trainer.lr_scheduler
-        )
+        # Get local_rank to determine if this is the main process
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
         
-        # Train the model
-        trainer_stats = trainer.train()
-        
-        # Save model (ensure this works with distributed training)
-        if accelerator.is_main_process:
-            save_model_and_tokenizer(f'{save_model_path}-lora', accelerator.unwrap_model(model), tokenizer)
+        # Save only from the main process (rank 0)
+        if local_rank == 0:
+            save_model_and_tokenizer(f'{save_model_path}-lora', model, tokenizer)
 
     if action == 'merge':
-        # Initialize accelerator for the merge process too
-        accelerator = Accelerator()
+        # Get local_rank to determine if this is the main process
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
         
-        # Wrap the model
-        model = accelerator.prepare(model)
-        
-        # load peft weights and merge
-        load_peft_state(accelerator.unwrap_model(model), f'{save_model_path}-lora')
-        model = merge_peft_into_base(accelerator.unwrap_model(model))
+        # Load peft weights and merge
+        load_peft_state(model, f'{save_model_path}-lora')
+        model = merge_peft_into_base(model)
         
         # Save only from the main process
-        if accelerator.is_main_process:
+        if local_rank == 0:
             save_model_and_tokenizer(f'{save_model_path}-merged', model, tokenizer)
 
 print("Training and merging complete!")
