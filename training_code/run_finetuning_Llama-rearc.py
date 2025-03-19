@@ -7,13 +7,19 @@ from datasets import Dataset
 
 from arc_loader import ArcDataset
 from model_tools import InputMaskingDataCollator
-from model_tools import load_unsloth_4bit, keep_single_char_tokens, save_model_and_tokenizer
+from model_tools import keep_single_char_tokens, save_model_and_tokenizer
 from model_tools import load_peft_state, merge_peft_into_base
 from arc_downloader import download_arc_data
 
 # Detect number of GPUs available
 num_gpus = torch.cuda.device_count()
 print(f"Number of GPUs detected: {num_gpus}")
+
+# Get current device based on local_rank
+local_rank = int(os.environ.get("LOCAL_RANK", 0))
+torch.cuda.set_device(local_rank)
+current_device = torch.device(f"cuda:{local_rank}")
+print(f"Process {local_rank} using device: {current_device}")
 
 # input paths
 base_model = 'chuanli11/Llama-3.2-3B-Instruct-uncensored'  # auto-downloaded from huggingface.co
@@ -23,9 +29,20 @@ download_arc_data(re_arc_path)
 # output paths
 save_model_path = os.path.join('pretrained_models', "Llama-3.2-3B-ReArc")
 
-# Get current device based on local_rank
-local_rank = int(os.environ.get("LOCAL_RANK", 0))
-torch.cuda.set_device(local_rank)
+# Custom function to load model with correct device
+def load_unsloth_4bit_with_device(model_name, device):
+    from unsloth.models import get_model_and_tokenizer
+
+    # Specify the device_map for the current GPU
+    model, tokenizer = get_model_and_tokenizer(
+        model_name=model_name,
+        max_seq_len=4096,
+        dtype=None,
+        load_in_4bit=True,
+        device_map={"": device.index}  # Use the current device
+    )
+    
+    return model, tokenizer
 
 for action in ['train', 'merge']:
     # continue if task already accomplished
@@ -34,9 +51,9 @@ for action in ['train', 'merge']:
     if action == 'merge' and os.path.exists(f'{save_model_path}-merged'):
         continue
 
-    # load base model & reduce embedding size
+    # load base model & reduce embedding size with correct device
     model = tokenizer = None  # free memory
-    model, tokenizer = load_unsloth_4bit(base_model)
+    model, tokenizer = load_unsloth_4bit_with_device(base_model, current_device)
     keep_tok = list('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?.:,;*+/-=')+tokenizer.tokenize('\n')
     keep_single_char_tokens(model, tokenizer, keep=keep_tok, remove_unk=True)
 
@@ -78,7 +95,16 @@ for action in ['train', 'merge']:
         FastLanguageModel.for_training(model)
         tokenizer.padding_side = 'right'
         
-        # Configure for FSDP instead of DeepSpeed
+        # Configure FSDP
+        fsdp_config = {
+            "fsdp_transformer_layer_cls_to_wrap": "LlamaDecoderLayer",
+            "fsdp_offload_params": False,
+            "fsdp_state_dict_type": "FULL_STATE_DICT",
+            "fsdp_backward_prefetch": "BACKWARD_POST",
+            "fsdp_min_num_params": 1e6,
+        }
+        
+        # Configure for FSDP
         training_args = TrainingArguments(
             per_device_train_batch_size=4,
             gradient_accumulation_steps=2,
@@ -96,9 +122,9 @@ for action in ['train', 'merge']:
             output_dir='tmp_output',
             save_strategy='no',
             report_to='none',
-            # Enable FSDP instead of DeepSpeed
+            # Enable FSDP
             fsdp="full_shard",
-            fsdp_transformer_layer_cls_to_wrap="LlamaDecoderLayer",
+            fsdp_config=fsdp_config,
             # Required for distributed training
             local_rank=local_rank,
         )
