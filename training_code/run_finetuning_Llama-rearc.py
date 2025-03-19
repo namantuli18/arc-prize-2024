@@ -16,6 +16,12 @@ from arc_downloader import download_arc_data
 num_gpus = torch.cuda.device_count()
 print(f"Number of GPUs detected: {num_gpus}")
 
+# Get current device based on local_rank
+local_rank = int(os.environ.get("LOCAL_RANK", 0))
+torch.cuda.set_device(local_rank)
+device = torch.device(f"cuda:{local_rank}")
+print(f"Process {local_rank} using device: {device}")
+
 # input paths
 base_model = 'chuanli11/Llama-3.2-3B-Instruct-uncensored'  # auto-downloaded from huggingface.co
 re_arc_path = os.path.join('input', 're_arc')  # https://github.com/michaelhodel/re-arc
@@ -67,23 +73,6 @@ os.makedirs('configs', exist_ok=True)
 with open('configs/ds_config.json', 'w') as f:
     json.dump(ds_config, f, indent=4)
 
-# Function to process dataset to match HF format
-def process_dataset_for_hf(dataset_list):
-    processed_data = []
-    
-    for item in dataset_list:
-        # Tokenize the text
-        tokenized = tokenizer(item["text"], truncation=False, padding=False)
-        
-        # Format for HF trainer
-        processed_data.append({
-            "input_ids": tokenized["input_ids"],
-            "attention_mask": tokenized["attention_mask"],
-            "labels": tokenized["input_ids"].copy()  # For causal LM, labels = input_ids
-        })
-    
-    return processed_data
-
 for action in ['train', 'merge']:
     # continue if task already accomplished
     if action == 'train' and os.path.exists(f'{save_model_path}-lora'):
@@ -97,7 +86,8 @@ for action in ['train', 'merge']:
         base_model,
         load_in_4bit=True,
         trust_remote_code=True,
-        device_map="auto"
+        # Don't use device_map='auto' for distributed training
+        device_map=None
     )
     tokenizer = AutoTokenizer.from_pretrained(
         base_model,
@@ -148,6 +138,23 @@ for action in ['train', 'merge']:
         train_dataset_augment = train_dataset.augment(**train_aug_opts)
         train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
         
+        # Function to process dataset to match HF format
+        def process_dataset_for_hf(dataset_list):
+            processed_data = []
+            
+            for item in dataset_list:
+                # Tokenize the text
+                tokenized = tokenizer(item["text"], truncation=False, padding=False)
+                
+                # Format for HF trainer
+                processed_data.append({
+                    "input_ids": tokenized["input_ids"],
+                    "attention_mask": tokenized["attention_mask"],
+                    "labels": tokenized["input_ids"].copy()  # For causal LM, labels = input_ids
+                })
+            
+            return processed_data
+            
         # Process dataset to match HF format
         processed_data = process_dataset_for_hf(train_dataset_as_list)
         hf_dataset = Dataset.from_list(processed_data)
@@ -180,7 +187,7 @@ for action in ['train', 'merge']:
             # DeepSpeed config
             deepspeed="configs/ds_config.json",
             # Required for distributed training
-            local_rank=int(os.environ.get("LOCAL_RANK", -1)),
+            local_rank=local_rank,
         )
         
         # Create data collator for language modeling
@@ -200,18 +207,12 @@ for action in ['train', 'merge']:
         # Train the model
         trainer.train()
         
-        # Get local_rank to determine if this is the main process
-        local_rank = int(os.environ.get("LOCAL_RANK", 0))
-        
         # Save only from the main process (rank 0)
         if local_rank == 0:
             model.save_pretrained(f'{save_model_path}-lora')
             tokenizer.save_pretrained(f'{save_model_path}-lora')
 
     if action == 'merge':
-        # Get local_rank to determine if this is the main process
-        local_rank = int(os.environ.get("LOCAL_RANK", 0))
-        
         # Load peft weights and merge
         model = model.merge_and_unload()
         
