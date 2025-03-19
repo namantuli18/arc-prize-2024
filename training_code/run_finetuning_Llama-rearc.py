@@ -1,26 +1,19 @@
 import os
-import json
 import torch
-import transformers
-from transformers import Trainer, TrainingArguments, AutoModelForCausalLM, AutoTokenizer, DataCollatorForLanguageModeling
-from peft import LoraConfig, get_peft_model
+from unsloth import FastLanguageModel
+from unsloth import UnslothTrainer as Trainer, is_bfloat16_supported
+from unsloth import UnslothTrainingArguments as TrainingArguments
 from datasets import Dataset
 
 from arc_loader import ArcDataset
-from model_tools import keep_single_char_tokens
-from model_tools import save_model_and_tokenizer
+from model_tools import InputMaskingDataCollator
+from model_tools import load_unsloth_4bit, keep_single_char_tokens, save_model_and_tokenizer
 from model_tools import load_peft_state, merge_peft_into_base
 from arc_downloader import download_arc_data
 
 # Detect number of GPUs available
 num_gpus = torch.cuda.device_count()
 print(f"Number of GPUs detected: {num_gpus}")
-
-# Get current device based on local_rank
-local_rank = int(os.environ.get("LOCAL_RANK", 0))
-torch.cuda.set_device(local_rank)
-device = torch.device(f"cuda:{local_rank}")
-print(f"Process {local_rank} using device: {device}")
 
 # input paths
 base_model = 'chuanli11/Llama-3.2-3B-Instruct-uncensored'  # auto-downloaded from huggingface.co
@@ -30,48 +23,9 @@ download_arc_data(re_arc_path)
 # output paths
 save_model_path = os.path.join('pretrained_models', "Llama-3.2-3B-ReArc")
 
-# Create DeepSpeed configuration file
-ds_config = {
-    "train_micro_batch_size_per_gpu": 4,
-    "gradient_accumulation_steps": 2,
-    "optimizer": {
-        "type": "AdamW",
-        "params": {
-            "lr": 1e-4,
-            "betas": [0.9, 0.999],
-            "eps": 1e-8,
-            "weight_decay": 0.0
-        }
-    },
-    "scheduler": {
-        "type": "WarmupLR",
-        "params": {
-            "warmup_min_lr": 0,
-            "warmup_max_lr": 1e-4,
-            "warmup_num_steps": "auto"
-        }
-    },
-    "fp16": {
-        "enabled": True
-    },
-    "bf16": {
-        "enabled": False
-    },
-    "zero_optimization": {
-        "stage": 2,
-        "offload_optimizer": {
-            "device": "cpu",
-            "pin_memory": True
-        },
-        "contiguous_gradients": True,
-        "overlap_comm": True
-    }
-}
-
-# Save the config to a file
-os.makedirs('configs', exist_ok=True)
-with open('configs/ds_config.json', 'w') as f:
-    json.dump(ds_config, f, indent=4)
+# Get current device based on local_rank
+local_rank = int(os.environ.get("LOCAL_RANK", 0))
+torch.cuda.set_device(local_rank)
 
 for action in ['train', 'merge']:
     # continue if task already accomplished
@@ -80,25 +34,9 @@ for action in ['train', 'merge']:
     if action == 'merge' and os.path.exists(f'{save_model_path}-merged'):
         continue
 
-    # Load model and tokenizer using standard HF approach
-    print(f"Loading model from {base_model}")
-    model = AutoModelForCausalLM.from_pretrained(
-        base_model,
-        load_in_4bit=True,
-        trust_remote_code=True,
-        # Don't use device_map='auto' for distributed training
-        device_map=None
-    )
-    tokenizer = AutoTokenizer.from_pretrained(
-        base_model,
-        trust_remote_code=True,
-    )
-    
-    # Make sure the tokenizer has a padding token
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    
-    # Keep only certain tokens to reduce embedding size
+    # load base model & reduce embedding size
+    model = tokenizer = None  # free memory
+    model, tokenizer = load_unsloth_4bit(base_model)
     keep_tok = list('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?.:,;*+/-=')+tokenizer.tokenize('\n')
     keep_single_char_tokens(model, tokenizer, keep=keep_tok, remove_unk=True)
 
@@ -112,23 +50,21 @@ for action in ['train', 'merge']:
         max_tokens=128000,
     )
 
-    # Create LoRA configuration
-    lora_config = LoraConfig(
+    # create lora model
+    lora_layers = ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj', 'embed_tokens', 'lm_head']
+    model = FastLanguageModel.get_peft_model(
+        model=model,
+        target_modules=lora_layers,
         r=256,
         lora_alpha=24,
         lora_dropout=0,
         bias="none",
-        target_modules=[
-            'q_proj', 'k_proj', 'v_proj', 'o_proj', 
-            'gate_proj', 'up_proj', 'down_proj', 
-            'embed_tokens', 'lm_head'
-        ],
-        task_type="CAUSAL_LM",
+        use_gradient_checkpointing=True,
+        random_state=42,
+        use_rslora=True,
+        loftq_config=None,
     )
-    
-    # Apply LoRA to model
-    model = get_peft_model(model, lora_config)
-    
+
     if action == 'train':
         # load training data
         train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=12, sizes=[6], seed=42)
@@ -137,88 +73,67 @@ for action in ['train', 'merge']:
         train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
         train_dataset_augment = train_dataset.augment(**train_aug_opts)
         train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
+
+        # run training
+        FastLanguageModel.for_training(model)
+        tokenizer.padding_side = 'right'
         
-        # Function to process dataset to match HF format
-        def process_dataset_for_hf(dataset_list):
-            processed_data = []
-            
-            for item in dataset_list:
-                # Tokenize the text
-                tokenized = tokenizer(item["text"], truncation=False, padding=False)
-                
-                # Format for HF trainer
-                processed_data.append({
-                    "input_ids": tokenized["input_ids"],
-                    "attention_mask": tokenized["attention_mask"],
-                    "labels": tokenized["input_ids"].copy()  # For causal LM, labels = input_ids
-                })
-            
-            return processed_data
-            
-        # Process dataset to match HF format
-        processed_data = process_dataset_for_hf(train_dataset_as_list)
-        hf_dataset = Dataset.from_list(processed_data)
-        
-        # Print the first example to verify format
-        print("Example from processed dataset:")
-        example = hf_dataset[0]
-        print(f"Keys: {list(example.keys())}")
-        print(f"Input IDs length: {len(example['input_ids'])}")
-        
-        # Enable gradient checkpointing
-        model.gradient_checkpointing_enable()
-        
-        # Create training arguments with DeepSpeed enabled
+        # Configure for FSDP instead of DeepSpeed
         training_args = TrainingArguments(
             per_device_train_batch_size=4,
             gradient_accumulation_steps=2,
             warmup_ratio=0.25,
             num_train_epochs=1,
             learning_rate=1e-4,
-            fp16=True,
+            embedding_learning_rate=1e-5,
+            fp16=not is_bfloat16_supported(),
+            bf16=is_bfloat16_supported(),
             logging_steps=10,
-            optim="adamw_torch",
+            optim="adamw_8bit",
             weight_decay=0.00,
             lr_scheduler_type='cosine',
             seed=42,
             output_dir='tmp_output',
             save_strategy='no',
             report_to='none',
-            # DeepSpeed config
-            deepspeed="configs/ds_config.json",
+            # Enable FSDP instead of DeepSpeed
+            fsdp="full_shard",
+            fsdp_transformer_layer_cls_to_wrap="LlamaDecoderLayer",
             # Required for distributed training
             local_rank=local_rank,
         )
         
-        # Create data collator for language modeling
-        data_collator = DataCollatorForLanguageModeling(
-            tokenizer=tokenizer,
-            mlm=False
-        )
-        
-        # Create the trainer with standard HF components
         trainer = Trainer(
             model=model,
+            tokenizer=tokenizer,
+            train_dataset=Dataset.from_list(train_dataset_as_list),
+            dataset_text_field="text",
+            max_seq_length=fmt_opts['max_tokens'],
+            packing=False,
+            data_collator=InputMaskingDataCollator(
+                instruction_template=fmt_opts['query_beg'],
+                response_template=fmt_opts['reply_beg'],
+                mlm=False,
+                tokenizer=tokenizer,
+                mask_first_n_examples=1,
+            ),
             args=training_args,
-            train_dataset=hf_dataset,
-            data_collator=data_collator,
         )
         
         # Train the model
         trainer.train()
         
-        # Save only from the main process (rank 0)
+        # Save model only from the main process
         if local_rank == 0:
-            model.save_pretrained(f'{save_model_path}-lora')
-            tokenizer.save_pretrained(f'{save_model_path}-lora')
+            save_model_and_tokenizer(f'{save_model_path}-lora', model, tokenizer)
 
     if action == 'merge':
         # Load peft weights and merge
-        model = model.merge_and_unload()
+        load_peft_state(model, f'{save_model_path}-lora')
+        model = merge_peft_into_base(model)
         
         # Save only from the main process
         if local_rank == 0:
-            model.save_pretrained(f'{save_model_path}-merged')
-            tokenizer.save_pretrained(f'{save_model_path}-merged')
+            save_model_and_tokenizer(f'{save_model_path}-merged', model, tokenizer)
 
 print("Training and merging complete!")
