@@ -7,7 +7,7 @@ from datasets import Dataset
 # Add these imports for Accelerate
 import json
 from accelerate import Accelerator
-from accelerate.utils import DummyOptim  # Import DummyOptim for DeepSpeed compatibility
+from accelerate.utils import DummyOptim, DummyScheduler
 
 from arc_loader import ArcDataset
 from model_tools import InputMaskingDataCollator
@@ -23,11 +23,25 @@ download_arc_data(re_arc_path)
 # output paths
 save_model_path = os.path.join('pretrained_models', "Llama-3.2-3B-ReArc")
 
-# Create DeepSpeed configuration file WITHOUT optimizer settings
+# Create DeepSpeed configuration file WITH optimizer settings
 ds_config = {
     "train_micro_batch_size_per_gpu": 4,
     "gradient_accumulation_steps": 2,
-    # Removed optimizer config from here
+    "optimizer": {
+        "type": "AdamW",
+        "params": {
+            "lr": 1e-4,
+            "weight_decay": 0.0
+        }
+    },
+    "scheduler": {
+        "type": "WarmupLR",
+        "params": {
+            "warmup_min_lr": 0,
+            "warmup_max_lr": 1e-4,
+            "warmup_num_steps": "auto"
+        }
+    },
     "fp16": {
         "enabled": not is_bfloat16_supported()
     },
@@ -104,12 +118,34 @@ for action in ['train', 'merge']:
         # Initialize the accelerator
         accelerator = Accelerator()
         
-        # Create dummy optimizer for DeepSpeed compatibility
-        # This dummy optimizer will be replaced by DeepSpeed but prevents the error
-        dummy_optimizer = DummyOptim(
-            params=model.parameters(),
-            lr=1e-4,
-            weight_decay=0.0
+        # Create proper DummyOptim for DeepSpeed
+        dummy_optimizer = DummyOptim(params=model.parameters())
+        # Also need a dummy scheduler
+        dummy_scheduler = DummyScheduler(dummy_optimizer)
+        
+        # Create training arguments without deepspeed config
+        training_args = TrainingArguments(
+            per_device_train_batch_size=4,
+            gradient_accumulation_steps=2,
+            warmup_ratio=0.25,
+            num_train_epochs=1,
+            learning_rate=1e-4,
+            embedding_learning_rate=1e-5,
+            fp16=not is_bfloat16_supported(),
+            bf16=is_bfloat16_supported(),
+            logging_steps=10,
+            # Don't specify optimizer here since we're using DummyOptim
+            # optim="adamw_8bit",
+            weight_decay=0.00,
+            lr_scheduler_type='cosine',
+            seed=42,
+            output_dir='tmp_output',
+            save_strategy='no',
+            report_to='none',
+            # Add DeepSpeed configuration
+            deepspeed="configs/ds_config.json",
+            # Add distributed training settings
+            local_rank=int(os.environ.get("LOCAL_RANK", -1)),
         )
         
         trainer = Trainer(
@@ -126,34 +162,17 @@ for action in ['train', 'merge']:
                 tokenizer=tokenizer,
                 mask_first_n_examples=1,
             ),
-            args=TrainingArguments(
-                per_device_train_batch_size=4,
-                gradient_accumulation_steps=2,
-                warmup_ratio=0.25,
-                num_train_epochs=1,
-                learning_rate=1e-4,
-                embedding_learning_rate=1e-5,
-                fp16=not is_bfloat16_supported(),
-                bf16=is_bfloat16_supported(),
-                logging_steps=10,
-                optim="adamw_8bit",
-                weight_decay=0.00,
-                lr_scheduler_type='cosine',
-                seed=42,
-                output_dir='tmp_output',
-                save_strategy='no',
-                report_to='none',
-                # Add DeepSpeed configuration
-                deepspeed="configs/ds_config.json",
-                # Add distributed training settings
-                local_rank=int(os.environ.get("LOCAL_RANK", -1)),
-            ),
+            args=training_args,
         )
         
-        # Use the accelerator to prepare the model and our dummy optimizer
-        # Instead of using trainer.create_optimizer()
-        trainer.model, trainer.optimizer = accelerator.prepare(
-            trainer.model, dummy_optimizer
+        # Don't create the optimizer through the trainer
+        # Instead, use our dummy optimizer and scheduler
+        trainer.optimizer = dummy_optimizer
+        trainer.lr_scheduler = dummy_scheduler
+        
+        # Use the accelerator to prepare the model, optimizer and scheduler
+        trainer.model, trainer.optimizer, trainer.lr_scheduler = accelerator.prepare(
+            trainer.model, trainer.optimizer, trainer.lr_scheduler
         )
         
         # Train the model
