@@ -1,24 +1,20 @@
 import os
 import json
 import torch
-from unsloth import FastLanguageModel
-from unsloth import UnslothTrainer as Trainer, is_bfloat16_supported
-from unsloth import UnslothTrainingArguments as TrainingArguments
+import transformers
+from transformers import Trainer, TrainingArguments, AutoModelForCausalLM, AutoTokenizer, default_data_collator
+from peft import LoraConfig, get_peft_model
 from datasets import Dataset
 
 from arc_loader import ArcDataset
-from model_tools import InputMaskingDataCollator
-from model_tools import load_unsloth_4bit, keep_single_char_tokens, save_model_and_tokenizer
+from model_tools import keep_single_char_tokens
+from model_tools import save_model_and_tokenizer
 from model_tools import load_peft_state, merge_peft_into_base
 from arc_downloader import download_arc_data
 
 # Detect number of GPUs available
 num_gpus = torch.cuda.device_count()
 print(f"Number of GPUs detected: {num_gpus}")
-
-# Set environment variable to disable Unsloth's custom loss functions
-# This should improve compatibility with DeepSpeed
-os.environ["UNSLOTH_DISABLE_FAST_LOSS"] = "1"
 
 # input paths
 base_model = 'chuanli11/Llama-3.2-3B-Instruct-uncensored'  # auto-downloaded from huggingface.co
@@ -28,15 +24,32 @@ download_arc_data(re_arc_path)
 # output paths
 save_model_path = os.path.join('pretrained_models', "Llama-3.2-3B-ReArc")
 
-# Create a simpler DeepSpeed configuration file
+# Create DeepSpeed configuration file
 ds_config = {
     "train_micro_batch_size_per_gpu": 4,
     "gradient_accumulation_steps": 2,
+    "optimizer": {
+        "type": "AdamW",
+        "params": {
+            "lr": 1e-4,
+            "betas": [0.9, 0.999],
+            "eps": 1e-8,
+            "weight_decay": 0.0
+        }
+    },
+    "scheduler": {
+        "type": "WarmupLR",
+        "params": {
+            "warmup_min_lr": 0,
+            "warmup_max_lr": 1e-4,
+            "warmup_num_steps": "auto"
+        }
+    },
     "fp16": {
-        "enabled": not is_bfloat16_supported()
+        "enabled": True
     },
     "bf16": {
-        "enabled": is_bfloat16_supported()
+        "enabled": False
     },
     "zero_optimization": {
         "stage": 2,
@@ -61,9 +74,24 @@ for action in ['train', 'merge']:
     if action == 'merge' and os.path.exists(f'{save_model_path}-merged'):
         continue
 
-    # load base model & reduce embedding size
-    model = tokenizer = None  # free memory
-    model, tokenizer = load_unsloth_4bit(base_model)
+    # Load model and tokenizer using standard HF approach
+    print(f"Loading model from {base_model}")
+    model = AutoModelForCausalLM.from_pretrained(
+        base_model,
+        load_in_4bit=True,
+        trust_remote_code=True,
+        device_map="auto"
+    )
+    tokenizer = AutoTokenizer.from_pretrained(
+        base_model,
+        trust_remote_code=True,
+    )
+    
+    # Make sure the tokenizer has a padding token
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    
+    # Keep only certain tokens to reduce embedding size
     keep_tok = list('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?.:,;*+/-=')+tokenizer.tokenize('\n')
     keep_single_char_tokens(model, tokenizer, keep=keep_tok, remove_unk=True)
 
@@ -77,21 +105,23 @@ for action in ['train', 'merge']:
         max_tokens=128000,
     )
 
-    # create lora model
-    lora_layers = ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj', 'embed_tokens', 'lm_head']
-    model = FastLanguageModel.get_peft_model(
-        model=model,
-        target_modules=lora_layers,
+    # Create LoRA configuration
+    lora_config = LoraConfig(
         r=256,
         lora_alpha=24,
         lora_dropout=0,
         bias="none",
-        use_gradient_checkpointing=True,
-        random_state=42,
-        use_rslora=True,
-        loftq_config=None,
+        target_modules=[
+            'q_proj', 'k_proj', 'v_proj', 'o_proj', 
+            'gate_proj', 'up_proj', 'down_proj', 
+            'embed_tokens', 'lm_head'
+        ],
+        task_type="CAUSAL_LM",
     )
-
+    
+    # Apply LoRA to model
+    model = get_peft_model(model, lora_config)
+    
     if action == 'train':
         # load training data
         train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=12, sizes=[6], seed=42)
@@ -100,10 +130,9 @@ for action in ['train', 'merge']:
         train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
         train_dataset_augment = train_dataset.augment(**train_aug_opts)
         train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
-
-        # run training
-        FastLanguageModel.for_training(model)
-        tokenizer.padding_side = 'right'
+        
+        # Enable gradient checkpointing
+        model.gradient_checkpointing_enable()
         
         # Create training arguments with DeepSpeed enabled
         training_args = TrainingArguments(
@@ -112,11 +141,9 @@ for action in ['train', 'merge']:
             warmup_ratio=0.25,
             num_train_epochs=1,
             learning_rate=1e-4,
-            embedding_learning_rate=1e-5,
-            fp16=not is_bfloat16_supported(),
-            bf16=is_bfloat16_supported(),
+            fp16=True,
             logging_steps=10,
-            optim="adamw_hf",
+            optim="adamw_torch",
             weight_decay=0.00,
             lr_scheduler_type='cosine',
             seed=42,
@@ -129,26 +156,16 @@ for action in ['train', 'merge']:
             local_rank=int(os.environ.get("LOCAL_RANK", -1)),
         )
         
-        # Create a standard HF collator instead of the custom one to improve compatibility
-        from transformers import DataCollatorForLanguageModeling
-        data_collator = DataCollatorForLanguageModeling(
-            tokenizer=tokenizer,
-            mlm=False
-        )
-        
-        # Create the trainer
+        # Create the trainer with standard HF components
         trainer = Trainer(
             model=model,
-            tokenizer=tokenizer,
-            train_dataset=Dataset.from_list(train_dataset_as_list),
-            dataset_text_field="text",
-            max_seq_length=fmt_opts['max_tokens'],
-            packing=False,
-            data_collator=data_collator,  # Using standard HF collator
             args=training_args,
+            train_dataset=Dataset.from_list(train_dataset_as_list),
+            data_collator=default_data_collator,
+            tokenizer=tokenizer,
         )
         
-        # Train the model directly with DeepSpeed handled by Trainer
+        # Train the model
         trainer.train()
         
         # Get local_rank to determine if this is the main process
@@ -156,18 +173,19 @@ for action in ['train', 'merge']:
         
         # Save only from the main process (rank 0)
         if local_rank == 0:
-            save_model_and_tokenizer(f'{save_model_path}-lora', model, tokenizer)
+            model.save_pretrained(f'{save_model_path}-lora')
+            tokenizer.save_pretrained(f'{save_model_path}-lora')
 
     if action == 'merge':
         # Get local_rank to determine if this is the main process
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
         
         # Load peft weights and merge
-        load_peft_state(model, f'{save_model_path}-lora')
-        model = merge_peft_into_base(model)
+        model = model.merge_and_unload()
         
         # Save only from the main process
         if local_rank == 0:
-            save_model_and_tokenizer(f'{save_model_path}-merged', model, tokenizer)
+            model.save_pretrained(f'{save_model_path}-merged')
+            tokenizer.save_pretrained(f'{save_model_path}-merged')
 
 print("Training and merging complete!")
