@@ -2,7 +2,7 @@ import os
 import json
 import torch
 import transformers
-from transformers import Trainer, TrainingArguments, AutoModelForCausalLM, AutoTokenizer, default_data_collator
+from transformers import Trainer, TrainingArguments, AutoModelForCausalLM, AutoTokenizer, DataCollatorForLanguageModeling
 from peft import LoraConfig, get_peft_model
 from datasets import Dataset
 
@@ -66,6 +66,23 @@ ds_config = {
 os.makedirs('configs', exist_ok=True)
 with open('configs/ds_config.json', 'w') as f:
     json.dump(ds_config, f, indent=4)
+
+# Function to process dataset to match HF format
+def process_dataset_for_hf(dataset_list):
+    processed_data = []
+    
+    for item in dataset_list:
+        # Tokenize the text
+        tokenized = tokenizer(item["text"], truncation=False, padding=False)
+        
+        # Format for HF trainer
+        processed_data.append({
+            "input_ids": tokenized["input_ids"],
+            "attention_mask": tokenized["attention_mask"],
+            "labels": tokenized["input_ids"].copy()  # For causal LM, labels = input_ids
+        })
+    
+    return processed_data
 
 for action in ['train', 'merge']:
     # continue if task already accomplished
@@ -131,6 +148,16 @@ for action in ['train', 'merge']:
         train_dataset_augment = train_dataset.augment(**train_aug_opts)
         train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
         
+        # Process dataset to match HF format
+        processed_data = process_dataset_for_hf(train_dataset_as_list)
+        hf_dataset = Dataset.from_list(processed_data)
+        
+        # Print the first example to verify format
+        print("Example from processed dataset:")
+        example = hf_dataset[0]
+        print(f"Keys: {list(example.keys())}")
+        print(f"Input IDs length: {len(example['input_ids'])}")
+        
         # Enable gradient checkpointing
         model.gradient_checkpointing_enable()
         
@@ -156,13 +183,18 @@ for action in ['train', 'merge']:
             local_rank=int(os.environ.get("LOCAL_RANK", -1)),
         )
         
+        # Create data collator for language modeling
+        data_collator = DataCollatorForLanguageModeling(
+            tokenizer=tokenizer,
+            mlm=False
+        )
+        
         # Create the trainer with standard HF components
         trainer = Trainer(
             model=model,
             args=training_args,
-            train_dataset=Dataset.from_list(train_dataset_as_list),
-            data_collator=default_data_collator,
-            tokenizer=tokenizer,
+            train_dataset=hf_dataset,
+            data_collator=data_collator,
         )
         
         # Train the model
