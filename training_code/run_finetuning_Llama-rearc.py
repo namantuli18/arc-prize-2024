@@ -1,7 +1,20 @@
+# Copyright 2024 Daniel Franzen and Jan Disselhoff
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import os
-import torch
 from unsloth import FastLanguageModel
-from unsloth import UnslothTrainer as Trainer, is_bfloat16_supported
+from unsloth import UnslothTrainer as Trainer, unsloth_train, is_bfloat16_supported
 from unsloth import UnslothTrainingArguments as TrainingArguments
 from datasets import Dataset
 
@@ -11,46 +24,13 @@ from model_tools import load_unsloth_4bit, keep_single_char_tokens, save_model_a
 from model_tools import load_peft_state, merge_peft_into_base
 from arc_downloader import download_arc_data
 
-# Detect number of GPUs available
-num_gpus = torch.cuda.device_count()
-print(f"Number of GPUs detected: {num_gpus}")
-
-# Get current device based on local_rank
-local_rank = int(os.environ.get("LOCAL_RANK", 0))
-torch.cuda.set_device(local_rank)
-
 # input paths
 base_model = 'chuanli11/Llama-3.2-3B-Instruct-uncensored'  # auto-downloaded from huggingface.co
 re_arc_path = os.path.join('input', 're_arc')  # https://github.com/michaelhodel/re-arc
-download_arc_data(re_arc_path)
+download_arc_data(arc_data_path)
 
 # output paths
 save_model_path = os.path.join('pretrained_models', "Llama-3.2-3B-ReArc")
-
-# Modify the model loading function in model_tools.py
-# Modified version that takes a specific device as input
-def device_aware_load_unsloth_4bit(model_name, current_device=None):
-    """
-    Load a model in 4-bit precision with device awareness for distributed training
-    """
-    from transformers import AutoTokenizer
-    
-    # If we're in distributed mode, make sure we're loading the model on the right device
-    if current_device is not None:
-        # Use FastLanguageModel with explicit device mapping
-        model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name=model_name,
-            load_in_4bit=True,
-            device_map={"": current_device}  # Assign to specific device
-        )
-    else:
-        # Original behavior for single GPU
-        model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name=model_name,
-            load_in_4bit=True,
-        )
-        
-    return model, tokenizer
 
 for action in ['train', 'merge']:
     # continue if task already accomplished
@@ -59,15 +39,9 @@ for action in ['train', 'merge']:
     if action == 'merge' and os.path.exists(f'{save_model_path}-merged'):
         continue
 
-    # load base model & reduce embedding size with correct device
+    # load base model & reduce embedding size
     model = tokenizer = None  # free memory
-    
-    # Get current device index
-    current_device = local_rank
-    
-    # Load model with device-aware function
-    model, tokenizer = device_aware_load_unsloth_4bit(base_model, current_device)
-    
+    model, tokenizer = load_unsloth_4bit(base_model)
     keep_tok = list('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?.:,;*+/-=')+tokenizer.tokenize('\n')
     keep_single_char_tokens(model, tokenizer, keep=keep_tok, remove_unk=True)
 
@@ -98,41 +72,17 @@ for action in ['train', 'merge']:
 
     if action == 'train':
         # load training data
-        train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=12, sizes=[6], seed=42)
+        train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=368, sizes=[6], seed=42)
 
-        # augment data set and transform to list
+        # augment data set and transform to list (eventually removing examples to stay below the max. token count)
         train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
         train_dataset_augment = train_dataset.augment(**train_aug_opts)
         train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
 
+
         # run training
         FastLanguageModel.for_training(model)
         tokenizer.padding_side = 'right'
-        
-        # Configure single GPU mode instead of distributed mode
-        # If multi-GPU is detected, we're deliberately ignoring it
-        # and letting each rank train its own model
-        training_args = TrainingArguments(
-            per_device_train_batch_size=4,
-            gradient_accumulation_steps=2,
-            warmup_ratio=0.25,
-            num_train_epochs=1,
-            learning_rate=1e-4,
-            embedding_learning_rate=1e-5,
-            fp16=not is_bfloat16_supported(),
-            bf16=is_bfloat16_supported(),
-            logging_steps=10,
-            optim="adamw_8bit",
-            weight_decay=0.00,
-            lr_scheduler_type='cosine',
-            seed=42,
-            output_dir=f'tmp_output_rank{local_rank}',
-            save_strategy='no',
-            report_to='none',
-            # Process-specific local rank
-            local_rank=local_rank,
-        )
-        
         trainer = Trainer(
             model=model,
             tokenizer=tokenizer,
@@ -147,22 +97,30 @@ for action in ['train', 'merge']:
                 tokenizer=tokenizer,
                 mask_first_n_examples=1,
             ),
-            args=training_args,
+            args=TrainingArguments(
+                per_device_train_batch_size=4,
+                gradient_accumulation_steps=2,
+                warmup_ratio=0.25,
+                num_train_epochs=1,
+                learning_rate=1e-4,
+                embedding_learning_rate=1e-5,
+                fp16=not is_bfloat16_supported(),
+                bf16=is_bfloat16_supported(),
+                logging_steps=10,
+                optim="adamw_8bit",
+                weight_decay=0.00,
+                lr_scheduler_type='cosine',
+                seed=42,
+                output_dir='tmp_output',
+                save_strategy='no',
+                report_to='none',
+            ),
         )
-        
-        # Train the model
-        trainer.train()
-        
-        # Each process saves its own model
-        save_model_and_tokenizer(f'{save_model_path}-lora-rank{local_rank}', model, tokenizer)
+        trainer_stats = unsloth_train(trainer)
+        save_model_and_tokenizer(f'{save_model_path}-lora', model, tokenizer)
 
     if action == 'merge':
-        # Load peft weights and merge
-        # Use rank-specific model
-        load_peft_state(model, f'{save_model_path}-lora-rank{local_rank}')
+        # load peft weights and merge
+        load_peft_state(model, f'{save_model_path}-lora')
         model = merge_peft_into_base(model)
-        
-        # Each process saves its own merged model
-        save_model_and_tokenizer(f'{save_model_path}-merged-rank{local_rank}', model, tokenizer)
-
-print(f"Training and merging complete for rank {local_rank}!")
+        save_model_and_tokenizer(f'{save_model_path}-merged', model, tokenizer)
