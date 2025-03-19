@@ -56,7 +56,6 @@ for action in ['train', 'merge']:
     model, tokenizer = load_unsloth_4bit(base_model)
 
     device = torch.device(f"cuda:{accelerator.local_process_index}")
-    model.to(device)
 
     keep_tok = list('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?.:,;*+/-=') + tokenizer.tokenize('\n')
     keep_single_char_tokens(model, tokenizer, keep=keep_tok, remove_unk=True)
