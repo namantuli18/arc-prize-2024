@@ -129,8 +129,8 @@ for action in ['train', 'merge']:
             fp16=not is_bfloat16_supported(),
             bf16=is_bfloat16_supported(),
             logging_steps=10,
-            # Let DeepSpeed handle the optimizer
-            optim=None,
+            # Use a valid optimizer name - DeepSpeed will override this anyway
+            optim="adamw_hf",
             weight_decay=0.00,
             lr_scheduler_type='cosine',
             seed=42,
