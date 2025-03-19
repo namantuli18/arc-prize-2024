@@ -7,6 +7,7 @@ from datasets import Dataset
 # Add these imports for Accelerate
 import json
 from accelerate import Accelerator
+from accelerate.utils import DummyOptim  # Import DummyOptim for DeepSpeed compatibility
 
 from arc_loader import ArcDataset
 from model_tools import InputMaskingDataCollator
@@ -22,25 +23,11 @@ download_arc_data(re_arc_path)
 # output paths
 save_model_path = os.path.join('pretrained_models', "Llama-3.2-3B-ReArc")
 
-# Create DeepSpeed configuration file
+# Create DeepSpeed configuration file WITHOUT optimizer settings
 ds_config = {
     "train_micro_batch_size_per_gpu": 4,
     "gradient_accumulation_steps": 2,
-    "optimizer": {
-        "type": "AdamW",
-        "params": {
-            "lr": 1e-4,
-            "weight_decay": 0.0
-        }
-    },
-    "scheduler": {
-        "type": "WarmupLR",
-        "params": {
-            "warmup_min_lr": 0,
-            "warmup_max_lr": 1e-4,
-            "warmup_num_steps": "auto"
-        }
-    },
+    # Removed optimizer config from here
     "fp16": {
         "enabled": not is_bfloat16_supported()
     },
@@ -105,7 +92,7 @@ for action in ['train', 'merge']:
         # load training data
         train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=12, sizes=[6], seed=42)
 
-        # augment data set and transform to list (eventually removing examples to stay below the max. token count)
+        # augment data set and transform to list
         train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
         train_dataset_augment = train_dataset.augment(**train_aug_opts)
         train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
@@ -114,8 +101,16 @@ for action in ['train', 'merge']:
         FastLanguageModel.for_training(model)
         tokenizer.padding_side = 'right'
         
-        # Initialize the accelerator (using the config file created by 'accelerate config')
+        # Initialize the accelerator
         accelerator = Accelerator()
+        
+        # Create dummy optimizer for DeepSpeed compatibility
+        # This dummy optimizer will be replaced by DeepSpeed but prevents the error
+        dummy_optimizer = DummyOptim(
+            params=model.parameters(),
+            lr=1e-4,
+            weight_decay=0.0
+        )
         
         trainer = Trainer(
             model=model,
@@ -155,12 +150,13 @@ for action in ['train', 'merge']:
             ),
         )
         
-        # Use the accelerator to prepare the model and optimizer
+        # Use the accelerator to prepare the model and our dummy optimizer
+        # Instead of using trainer.create_optimizer()
         trainer.model, trainer.optimizer = accelerator.prepare(
-            trainer.model, trainer.create_optimizer()
+            trainer.model, dummy_optimizer
         )
         
-        # Train the model using trainer.train() instead of unsloth_train
+        # Train the model
         trainer_stats = trainer.train()
         
         # Save model (ensure this works with distributed training)
@@ -181,3 +177,5 @@ for action in ['train', 'merge']:
         # Save only from the main process
         if accelerator.is_main_process:
             save_model_and_tokenizer(f'{save_model_path}-merged', model, tokenizer)
+
+print("Training and merging complete!")
