@@ -19,7 +19,7 @@ from transformers import (
     AutoTokenizer, 
     Trainer, 
     TrainingArguments,
-    DataCollatorForLanguageModeling
+    BitsAndBytesConfig
 )
 from peft import (
     LoraConfig, 
@@ -46,17 +46,24 @@ def load_model_and_tokenizer(model_name):
     """Load model and tokenizer for 4-bit quantization"""
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     
-    # Configure model to use 4-bit quantization
+    # Make sure the tokenizer has a pad token
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    
+    # Configure 4-bit quantization with BitsAndBytesConfig
+    quantization_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
+        bnb_4bit_use_double_quant=True
+    )
+    
+    # Load the model with quantization config
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        load_in_4bit=True,
+        quantization_config=quantization_config,
         torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
-        device_map="auto",
-        quantization_config={
-            "bnb_4bit_quant_type": "nf4",
-            "bnb_4bit_compute_dtype": torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
-            "bnb_4bit_use_double_quant": True,
-        }
+        device_map="auto"
     )
     
     # Prepare model for training with 4-bit quantization
