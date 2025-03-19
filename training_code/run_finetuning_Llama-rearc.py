@@ -24,28 +24,38 @@ from model_tools import load_unsloth_4bit, keep_single_char_tokens, save_model_a
 from model_tools import load_peft_state, merge_peft_into_base
 from arc_downloader import download_arc_data
 
-# input paths
+# ======== Accelerate for Distributed Training ========
+from accelerate import Accelerator
+
+# Initialize accelerator
+accelerator = Accelerator()
+
+# Input paths
 base_model = 'chuanli11/Llama-3.2-3B-Instruct-uncensored'  # auto-downloaded from huggingface.co
 re_arc_path = os.path.join('input', 're_arc')  # https://github.com/michaelhodel/re-arc
+arc_data_path = os.path.join('input', 'arc_data')
 download_arc_data(arc_data_path)
 
-# output paths
+# Output paths
 save_model_path = os.path.join('pretrained_models', "Llama-3.2-3B-ReArc")
 
+# Loop for training and merging
 for action in ['train', 'merge']:
-    # continue if task already accomplished
+    # Skip if task already accomplished
     if action == 'train' and os.path.exists(f'{save_model_path}-lora'):
         continue
     if action == 'merge' and os.path.exists(f'{save_model_path}-merged'):
         continue
 
-    # load base model & reduce embedding size
-    model = tokenizer = None  # free memory
+    # Load base model & reduce embedding size
+    model = tokenizer = None  # Free memory
     model, tokenizer = load_unsloth_4bit(base_model)
-    keep_tok = list('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?.:,;*+/-=')+tokenizer.tokenize('\n')
+    
+    # Define the allowed token set
+    keep_tok = list('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?.:,;*+/-=') + tokenizer.tokenize('\n')
     keep_single_char_tokens(model, tokenizer, keep=keep_tok, remove_unk=True)
 
-    # set formatting options
+    # Set formatting options
     fmt_opts = dict(
         preprompt='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjklmnpqrstuvwxyz',
         query_beg='I',
@@ -55,7 +65,7 @@ for action in ['train', 'merge']:
         max_tokens=128000,
     )
 
-    # create lora model
+    # Create LoRA model
     lora_layers = ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj', 'embed_tokens', 'lm_head']
     model = FastLanguageModel.get_peft_model(
         model=model,
@@ -71,18 +81,18 @@ for action in ['train', 'merge']:
     )
 
     if action == 'train':
-        # load training data
+        # Load training data
         train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=368, sizes=[6], seed=42)
 
-        # augment data set and transform to list (eventually removing examples to stay below the max. token count)
+        # Augment dataset and transform to list
         train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
         train_dataset_augment = train_dataset.augment(**train_aug_opts)
         train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
 
-
-        # run training
+        # Prepare model for training
         FastLanguageModel.for_training(model)
         tokenizer.padding_side = 'right'
+
         trainer = Trainer(
             model=model,
             tokenizer=tokenizer,
@@ -116,11 +126,22 @@ for action in ['train', 'merge']:
                 report_to='none',
             ),
         )
+
+        # Prepare for distributed training
+        model, trainer = accelerator.prepare(model, trainer)
+
+        # Run training
         trainer_stats = unsloth_train(trainer)
-        save_model_and_tokenizer(f'{save_model_path}-lora', model, tokenizer)
+
+        # Save model and tokenizer (only on the main process)
+        if accelerator.is_main_process:
+            save_model_and_tokenizer(f'{save_model_path}-lora', model, tokenizer)
 
     if action == 'merge':
-        # load peft weights and merge
+        # Load PEFT weights and merge
         load_peft_state(model, f'{save_model_path}-lora')
         model = merge_peft_into_base(model)
-        save_model_and_tokenizer(f'{save_model_path}-merged', model, tokenizer)
+
+        # Save merged model and tokenizer (only on main process)
+        if accelerator.is_main_process:
+            save_model_and_tokenizer(f'{save_model_path}-merged', model, tokenizer)
