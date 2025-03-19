@@ -29,7 +29,7 @@ from arc_downloader import download_arc_data
 # -------------------------
 # Initialize Accelerator
 # -------------------------
-accelerator = Accelerator(mixed_precision="fp16")
+accelerator = Accelerator(mixed_precision="bf16" if is_bfloat16_supported() else "fp16")
 torch.manual_seed(42)  # Ensure deterministic results across GPUs
 
 # -------------------------

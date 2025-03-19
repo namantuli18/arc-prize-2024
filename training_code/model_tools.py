@@ -20,11 +20,6 @@ from tokenizers import Tokenizer
 from huggingface_hub import snapshot_download
 from trl import DataCollatorForCompletionOnlyLM
 
-from accelerate import Accelerator
-
-device_index = Accelerator().process_index
-device_map = {"": device_index}
-
 class InputMaskingDataCollator(DataCollatorForCompletionOnlyLM):
     def __init__(self, mask_first_n_examples=0, **kwargs):
         super().__init__(**kwargs)
@@ -48,9 +43,8 @@ def load_unsloth_4bit(model_path):
     return FastLanguageModel.from_pretrained(
         model_name=model_path,
         dtype=None,
-        load_in_4bit=True,
-        device_map=device_map
-    )
+        load_in_4bit=True    
+        )
 
 
 def save_model_and_tokenizer(store_path, model, tokenizer):
