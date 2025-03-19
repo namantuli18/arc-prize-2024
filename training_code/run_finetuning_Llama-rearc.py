@@ -16,6 +16,10 @@ from arc_downloader import download_arc_data
 num_gpus = torch.cuda.device_count()
 print(f"Number of GPUs detected: {num_gpus}")
 
+# Set environment variable to disable Unsloth's custom loss functions
+# This should improve compatibility with DeepSpeed
+os.environ["UNSLOTH_DISABLE_FAST_LOSS"] = "1"
+
 # input paths
 base_model = 'chuanli11/Llama-3.2-3B-Instruct-uncensored'  # auto-downloaded from huggingface.co
 re_arc_path = os.path.join('input', 're_arc')  # https://github.com/michaelhodel/re-arc
@@ -24,27 +28,10 @@ download_arc_data(re_arc_path)
 # output paths
 save_model_path = os.path.join('pretrained_models', "Llama-3.2-3B-ReArc")
 
-# Create DeepSpeed configuration file
+# Create a simpler DeepSpeed configuration file
 ds_config = {
     "train_micro_batch_size_per_gpu": 4,
     "gradient_accumulation_steps": 2,
-    "optimizer": {
-        "type": "AdamW",
-        "params": {
-            "lr": 1e-4,
-            "betas": [0.9, 0.999],
-            "eps": 1e-8,
-            "weight_decay": 0.0
-        }
-    },
-    "scheduler": {
-        "type": "WarmupLR",
-        "params": {
-            "warmup_min_lr": 0,
-            "warmup_max_lr": 1e-4,
-            "warmup_num_steps": "auto"
-        }
-    },
     "fp16": {
         "enabled": not is_bfloat16_supported()
     },
@@ -129,7 +116,6 @@ for action in ['train', 'merge']:
             fp16=not is_bfloat16_supported(),
             bf16=is_bfloat16_supported(),
             logging_steps=10,
-            # Use a valid optimizer name - DeepSpeed will override this anyway
             optim="adamw_hf",
             weight_decay=0.00,
             lr_scheduler_type='cosine',
@@ -143,6 +129,13 @@ for action in ['train', 'merge']:
             local_rank=int(os.environ.get("LOCAL_RANK", -1)),
         )
         
+        # Create a standard HF collator instead of the custom one to improve compatibility
+        from transformers import DataCollatorForLanguageModeling
+        data_collator = DataCollatorForLanguageModeling(
+            tokenizer=tokenizer,
+            mlm=False
+        )
+        
         # Create the trainer
         trainer = Trainer(
             model=model,
@@ -151,13 +144,7 @@ for action in ['train', 'merge']:
             dataset_text_field="text",
             max_seq_length=fmt_opts['max_tokens'],
             packing=False,
-            data_collator=InputMaskingDataCollator(
-                instruction_template=fmt_opts['query_beg'],
-                response_template=fmt_opts['reply_beg'],
-                mlm=False,
-                tokenizer=tokenizer,
-                mask_first_n_examples=1,
-            ),
+            data_collator=data_collator,  # Using standard HF collator
             args=training_args,
         )
         
