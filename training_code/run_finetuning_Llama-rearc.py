@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import torch
 from unsloth import FastLanguageModel
 from unsloth import UnslothTrainer as Trainer, unsloth_train, is_bfloat16_supported
 from unsloth import UnslothTrainingArguments as TrainingArguments
@@ -47,10 +48,9 @@ for action in ['train', 'merge']:
     if action == 'merge' and os.path.exists(f'{save_model_path}-merged'):
         continue
 
-    # Load base model & reduce embedding size
-    model = tokenizer = None  # Free memory
-    model, tokenizer = load_unsloth_4bit(base_model)
-    
+    # Load base model with 4-bit quantization & map to correct device
+    model, tokenizer = load_unsloth_4bit(base_model, device_map={'': torch.cuda.current_device()})
+
     # Define the allowed token set
     keep_tok = list('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?.:,;*+/-=') + tokenizer.tokenize('\n')
     keep_single_char_tokens(model, tokenizer, keep=keep_tok, remove_unk=True)
@@ -82,14 +82,14 @@ for action in ['train', 'merge']:
 
     if action == 'train':
         # Load training data
-        train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=12, sizes=[6], seed=42)
+        train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=368, sizes=[6], seed=42)
 
         # Augment dataset and transform to list
         train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
         train_dataset_augment = train_dataset.augment(**train_aug_opts)
         train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
 
-        # Prepare model for training
+        # Prepare model for training (4-bit models should NOT be passed to accelerator.prepare)
         FastLanguageModel.for_training(model)
         tokenizer.padding_side = 'right'
 
@@ -127,8 +127,8 @@ for action in ['train', 'merge']:
             ),
         )
 
-        # Prepare for distributed training
-        model, trainer = accelerator.prepare(model, trainer)
+        # ONLY prepare the trainer for distributed training
+        trainer = accelerator.prepare(trainer)
 
         # Run training
         trainer_stats = unsloth_train(trainer)
@@ -142,6 +142,6 @@ for action in ['train', 'merge']:
         load_peft_state(model, f'{save_model_path}-lora')
         model = merge_peft_into_base(model)
 
-        # Save merged model and tokenizer (only on main process)
+        # Save merged model and tokenizer (only on the main process)
         if accelerator.is_main_process:
             save_model_and_tokenizer(f'{save_model_path}-merged', model, tokenizer)
