@@ -111,7 +111,7 @@ for action in ['train', 'merge']:
         )
 
         trainer = Trainer(
-            model=model,
+            model=model.module,
             tokenizer=tokenizer,
             train_dataset=Dataset.from_list(train_dataset_as_list),
             dataset_text_field="text",
