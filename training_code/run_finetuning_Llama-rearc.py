@@ -14,7 +14,7 @@
 
 import os
 import torch
-import torch.distributed as dist
+from accelerate import Accelerator
 from unsloth import FastLanguageModel
 from unsloth import UnslothTrainer as Trainer, unsloth_train, is_bfloat16_supported
 from unsloth import UnslothTrainingArguments as TrainingArguments
@@ -27,11 +27,9 @@ from model_tools import load_peft_state, merge_peft_into_base
 from arc_downloader import download_arc_data
 
 # -------------------------
-# Distributed Training Setup
+# Initialize Accelerator
 # -------------------------
-dist.init_process_group(backend='nccl')  # Use 'nccl' for GPU, 'gloo' for CPU
-local_rank = int(os.environ["LOCAL_RANK"])
-torch.cuda.set_device(local_rank)
+accelerator = Accelerator(mixed_precision="bf16" if is_bfloat16_supported() else "fp16")
 torch.manual_seed(42)  # Ensure deterministic results across GPUs
 
 # -------------------------
@@ -84,6 +82,9 @@ for action in ['train', 'merge']:
         loftq_config=None,
     )
 
+    # Prepare model with accelerate
+    model, tokenizer = accelerator.prepare(model, tokenizer)
+
     if action == 'train':
         # Load training data
         train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=12, sizes=[6], seed=42)
@@ -97,21 +98,8 @@ for action in ['train', 'merge']:
         FastLanguageModel.for_training(model)
         tokenizer.padding_side = 'right'
 
-        # -------------------------
-        # Distributed Training: DDP
-        # -------------------------
-        model.to(local_rank)
-
-        # Wrap in DistributedDataParallel
-        model = torch.nn.parallel.DistributedDataParallel(
-            model,
-            device_ids=[local_rank],
-            output_device=local_rank,
-            find_unused_parameters=False,
-        )
-
         trainer = Trainer(
-            model=model.module,
+            model=model,
             tokenizer=tokenizer,
             train_dataset=Dataset.from_list(train_dataset_as_list),
             dataset_text_field="text",
@@ -146,18 +134,15 @@ for action in ['train', 'merge']:
 
         trainer_stats = unsloth_train(trainer)
 
-        if dist.get_rank() == 0:  # Save only on rank 0
-            save_model_and_tokenizer(f'{save_model_path}-lora', model.module, tokenizer)
+        # Save only on the main process
+        if accelerator.is_main_process:
+            save_model_and_tokenizer(f'{save_model_path}-lora', model, tokenizer)
 
     if action == 'merge':
         # Load PEFT weights and merge
-        load_peft_state(model.module, f'{save_model_path}-lora')
-        model = merge_peft_into_base(model.module)
+        load_peft_state(model, f'{save_model_path}-lora')
+        model = merge_peft_into_base(model)
 
-        if dist.get_rank() == 0:
+        if accelerator.is_main_process:
             save_model_and_tokenizer(f'{save_model_path}-merged', model, tokenizer)
 
-# -------------------------
-# Clean up distributed resources
-# -------------------------
-dist.destroy_process_group()
