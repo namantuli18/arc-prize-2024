@@ -13,7 +13,7 @@ print(f"CUDA memory allocated: {torch.cuda.memory_allocated() / 1e9} GB")
 print(f"CUDA memory reserved: {torch.cuda.memory_reserved() / 1e9} GB")
 
 # Input paths
-base_model = 'chuanli11/Llama-3.2-3B-Instruct-uncensored'  # auto-downloaded from huggingface.co
+base_model = 'nvidia/Mistral-NeMo-Minitron-8B-Base'  # auto-downloaded from huggingface.co
 re_arc_path = os.path.join('input/arc-data/ARC-Data/input', 're_arc')  # https://github.com/michaelhodel/re-arc
 
 # Output path
