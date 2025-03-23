@@ -306,6 +306,12 @@ for action in ['train', 'merge']:
     #    and if <bos> did not exist before, call resize_token_embeddings:
     model.resize_token_embeddings(len(tokenizer))
 
+    # 6) Verify the changes
+    print("\nAfter re-mapping:")
+    print(" Special tokens map:", tokenizer.special_tokens_map)
+    print(" bos_token:", tokenizer.bos_token)
+    print(" bos_token_id:", tokenizer.bos_token_id)
+
     # Create LoRA model
     lora_layers = ['q_proj','k_proj','v_proj','o_proj','gate_proj','up_proj','down_proj','embed_tokens','lm_head']
     model = setup_peft_model(model, r=256, lora_alpha=24, target_modules=lora_layers)
