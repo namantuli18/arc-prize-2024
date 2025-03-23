@@ -280,7 +280,7 @@ for action in ['train', 'merge']:
         reply_beg='\n+/-=O',
         reply_end='\n' + tokenizer.eos_token,
         lines_sep='\n',
-        max_tokens=128000,
+        max_tokens=8192,
     )
 
     # Create LoRA model
