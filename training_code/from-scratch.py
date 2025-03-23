@@ -17,6 +17,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments
 from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model, PeftModel
 from datasets import Dataset
+import random
 
 from arc_loader import ArcDataset
 print(f"CUDA available: {torch.cuda.is_available()}")
@@ -344,15 +345,6 @@ for action in ['train', 'merge']:
         # load training data
         train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=4, sizes=[6], seed=42)
         
-        # Take only 10% of the data
-        total_size = len(train_dataset)
-        subset_size = int(total_size * 0.1)
-        print(f"Total dataset size: {total_size}")
-        print(f"Using subset size: {subset_size}")
-        
-        # Randomly select 10% of the data
-        train_dataset = train_dataset.select(range(subset_size))
-
         # augment data set and transform to list
         train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
         train_dataset_augment = train_dataset.augment(**train_aug_opts)
