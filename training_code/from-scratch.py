@@ -54,7 +54,10 @@ ds_config = {
     "gradient_clipping": 1.0,
     "steps_per_print": 10,
     "train_micro_batch_size_per_gpu": "auto",  # Set to auto to match TrainingArguments
-    "wall_clock_breakdown": False
+    "wall_clock_breakdown": False,
+    "distributed": {
+        "enabled": False  # Disable distributed training
+    }
 }
 
 def load_model_4bit(model_name_or_path):
@@ -386,7 +389,9 @@ for action in ['train', 'merge']:
             report_to='none',
             deepspeed=ds_config,
             remove_unused_columns=False,
-            label_names=["labels", "input_ids", "attention_mask"]
+            label_names=["labels", "input_ids", "attention_mask"],
+            local_rank=-1,  # Disable distributed training
+            ddp_find_unused_parameters=False  # Disable DDP parameter finding
         )
 
         # Setup trainer
