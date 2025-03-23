@@ -299,6 +299,13 @@ for action in ['train', 'merge']:
     tokenizer.add_special_tokens({"bos_token": "<bos>"})  # ensures <bos> is recognized
 
 
+    # 4) Update your model config if needed
+    model.config.bos_token_id = tokenizer.bos_token_id
+
+    # 5) (Optional) If you want the model’s embedding matrix to include the new token
+    #    and if <bos> did not exist before, call resize_token_embeddings:
+    model.resize_token_embeddings(len(tokenizer))
+
     # Create LoRA model
     lora_layers = ['q_proj','k_proj','v_proj','o_proj','gate_proj','up_proj','down_proj','embed_tokens','lm_head']
     model = setup_peft_model(model, r=256, lora_alpha=24, target_modules=lora_layers)
