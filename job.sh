@@ -13,7 +13,7 @@
 
 # Activate conda environment
 source ~/miniconda3/etc/profile.d/conda.sh
-conda activate ft-llm && pip install mpi4py
+conda activate ft-llm
 
 # Create logs directory if it doesn't exist
 mkdir -p logs
