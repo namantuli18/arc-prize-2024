@@ -165,6 +165,40 @@ class InputMaskingDataCollator:
                         batch["labels"][i, instr_token_pos:resp_token_pos] = -100
         
         return batch
+    
+
+class DebuggingDataCollator(InputMaskingDataCollator):
+    """
+    A debugging collator that intercepts out-of-range token IDs and prints them
+    before they cause the "device-side assert" in the embedding lookup.
+    """
+    def __init__(self, tokenizer, model, **kwargs):
+        super().__init__(tokenizer, **kwargs)
+        self.model = model
+
+    def __call__(self, features):
+        # Use the parent collator to get a properly padded batch
+        batch = super().__call__(features)
+
+        # How many tokens the embedding actually has
+        embedding_size = self.model.get_input_embeddings().weight.size(0)
+
+        # Check each token in input_ids
+        for i, input_ids_example in enumerate(batch["input_ids"]):
+            for j, token_id in enumerate(input_ids_example):
+                if token_id >= embedding_size or token_id < 0:
+                    # Decode the single out-of-range token
+                    token_str = self.tokenizer.decode([token_id])
+                    print(
+                        f"Out-of-range token encountered: '{token_str}' "
+                        f"(ID: {token_id}) at position {j} in batch item {i}. "
+                        f"Embedding size is {embedding_size}."
+                    )
+                    # Optionally raise an error so training stops immediately
+                    raise ValueError("Encountered out-of-range token ID!")
+
+        return batch
+
 
 def setup_peft_model(model, r=256, lora_alpha=24, target_modules=None):
     """
@@ -269,11 +303,19 @@ for action in ['train', 'merge']:
         
         # Data collator
         tokenizer.padding_side = 'right'
-        data_collator = InputMaskingDataCollator(
-            instruction_template=fmt_opts['query_beg'],
-            response_template=fmt_opts['reply_beg'],
-            mlm=False,
+        # data_collator = InputMaskingDataCollator(
+        #     instruction_template=fmt_opts['query_beg'],
+        #     response_template=fmt_opts['reply_beg'],
+        #     mlm=False,
+        #     tokenizer=tokenizer,
+        #     mask_first_n_examples=1,
+        # )
+        debug_data_collator = DebuggingDataCollator(
             tokenizer=tokenizer,
+            model=model,
+            instruction_template="I",
+            response_template="\n+/-=O",
+            mlm=False,
             mask_first_n_examples=1,
         )
 
@@ -301,9 +343,10 @@ for action in ['train', 'merge']:
             model=model,
             tokenizer=tokenizer,
             train_dataset=train_dataset_tokenized,
-            data_collator=data_collator,
+            data_collator=debug_data_collator,  #ADDING DEBUGGING COLLATOR
             args=training_args,
         )
+
         
         # Train the model
         trainer.train()
