@@ -49,10 +49,10 @@ ds_config = {
         "contiguous_gradients": True,
         "reduce_bucket_size": "auto"
     },
-    "gradient_accumulation_steps": 1,  # No need for gradient accumulation on single GPU
+    "gradient_accumulation_steps": "auto",  # Set to auto to match TrainingArguments
     "gradient_clipping": 1.0,
     "steps_per_print": 10,
-    "train_micro_batch_size_per_gpu": 4,  # Increased batch size for single GPU
+    "train_micro_batch_size_per_gpu": "auto",  # Set to auto to match TrainingArguments
     "wall_clock_breakdown": False
 }
 
@@ -368,8 +368,8 @@ for action in ['train', 'merge']:
 
         # Setup training arguments with DeepSpeed
         training_args = TrainingArguments(
-            per_device_train_batch_size=1,
-            gradient_accumulation_steps=2,
+            per_device_train_batch_size="auto",  # Increased batch size for A100
+            gradient_accumulation_steps="auto",  # No need for gradient accumulation
             warmup_ratio=0.25,
             num_train_epochs=1,
             learning_rate=1e-4,
@@ -383,17 +383,17 @@ for action in ['train', 'merge']:
             output_dir='tmp_output',
             save_strategy='no',
             report_to='none',
-            deepspeed=ds_config,  # Add DeepSpeed config here
-            remove_unused_columns=False,  # Prevent column filtering
+            deepspeed=ds_config,
+            remove_unused_columns=False,
+            label_names=["labels", "input_ids", "attention_mask"]  # Add label names
         )
 
         # Setup trainer
         trainer = Trainer(
             model=model,
-            tokenizer=tokenizer,
+            args=training_args,
             train_dataset=train_dataset_tokenized,
             data_collator=data_collator,
-            args=training_args,
         )
         
         # Train the model
