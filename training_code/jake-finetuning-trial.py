@@ -259,7 +259,7 @@ def main():
             logger.info("Setting up DeepSpeed configuration")
             deepspeed_config = {
                 "zero_optimization": {
-                    "stage": 2,
+                    "stage": 1,  # Less aggressive memory optimization for single GPU
                     "offload_optimizer": {
                         "device": "cpu",
                         "pin_memory": True
@@ -289,7 +289,7 @@ def main():
                         "total_num_steps": "auto"
                     }
                 },
-                "gradient_accumulation_steps": 2,
+                "gradient_accumulation_steps": 1,  # No need for gradient accumulation with A100
                 "gradient_clipping": 1.0,
                 "fp16": {
                     "enabled": not torch.cuda.is_bf16_supported(),
@@ -298,7 +298,7 @@ def main():
                     "enabled": torch.cuda.is_bf16_supported(),
                 },
                 "train_batch_size": "auto",
-                "train_micro_batch_size_per_gpu": 4,
+                "train_micro_batch_size_per_gpu": 8,  # Increased batch size for A100
             }
 
             # run training with DeepSpeed
@@ -306,8 +306,8 @@ def main():
             training_args = TrainingArguments(
                 output_dir='tmp_output',
                 num_train_epochs=1,
-                per_device_train_batch_size=4,
-                gradient_accumulation_steps=2,
+                per_device_train_batch_size=8,  # Increased to match DeepSpeed config
+                gradient_accumulation_steps=1,  # No need for gradient accumulation
                 warmup_ratio=0.25,
                 learning_rate=1e-4,
                 weight_decay=0.00,
@@ -317,7 +317,7 @@ def main():
                 save_strategy='no',
                 report_to='none',
                 seed=42,
-                deepspeed=deepspeed_config,  # Enable DeepSpeed
+                deepspeed=deepspeed_config,
             )
             
             logger.info("Starting training with DeepSpeed")

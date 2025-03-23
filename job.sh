@@ -1,27 +1,26 @@
 #!/bin/bash
-#SBATCH --job-name=trial_ft
-#SBATCH --output=trial_ft.out
-#SBATCH --error=trial_ft.err
-#SBATCH --partition=general
+#SBATCH --job-name=arc_train
+#SBATCH --output=logs/%x_%j.out
+#SBATCH --error=logs/%x_%j.err
+#SBATCH --time=24:00:00
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
+#SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=64G
-#SBATCH --time=1:00:00
-#SBATCH --gres=gpu:A6000:1
+#SBATCH --mem=32G
+#SBATCH --gres=gpu:1
+#SBATCH --partition=standard
 
-# Load your conda environment
+# Activate conda environment
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate ft-llm
 
-# Set Hugging Face cache directory
-export TRANSFORMERS_CACHE="/scratch/$USER/hf_cache/models"
+# Create logs directory if it doesn't exist
+mkdir -p logs
 
-# Create offload directory
-mkdir -p offload
-
-# Change directory to your project folder
-cd ~/arc-prize-2024
+# Set environment variables for better stability
+export CUDA_LAUNCH_BLOCKING=1
+export TOKENIZERS_PARALLELISM=false
+export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 
 # Run the training script
-python3 training_code/jake-finetuning-trial.py 
+python training_code/from-scratch.py 
