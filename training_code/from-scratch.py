@@ -283,6 +283,22 @@ for action in ['train', 'merge']:
         max_tokens=8192,
     )
 
+    # 1) Check your current special tokens
+    print("Before re-mapping:")
+    print(" Special tokens map:", tokenizer.special_tokens_map)
+    print(" bos_token:", tokenizer.bos_token)
+    print(" bos_token_id:", tokenizer.bos_token_id)
+
+    # 2) Remove the old token if needed
+    # If your tokenizer has bos_token == '<|begin_of_text|>', reset it
+    if tokenizer.bos_token == "<|begin_of_text|>":
+        tokenizer.bos_token = None
+
+    # 3) Define a new <bos> token and add it to the tokenizer
+    tokenizer.bos_token = "<bos>"
+    tokenizer.add_special_tokens({"bos_token": "<bos>"})  # ensures <bos> is recognized
+
+
     # Create LoRA model
     lora_layers = ['q_proj','k_proj','v_proj','o_proj','gate_proj','up_proj','down_proj','embed_tokens','lm_head']
     model = setup_peft_model(model, r=256, lora_alpha=24, target_modules=lora_layers)
