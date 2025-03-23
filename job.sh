@@ -7,8 +7,9 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --gres=gpu:1
-#SBATCH --partition=standard
+#SBATCH --gres=gpu:A6100_40GB:1
+#SBATCH --partition=general
+
 
 # Activate conda environment
 source ~/miniconda3/etc/profile.d/conda.sh
