@@ -248,11 +248,18 @@ def load_peft_state(model, peft_model_path):
     """
     Load PEFT adapter weights.
     """
-    if not isinstance(model, PeftModel):
-        model = PeftModel.from_pretrained(model, peft_model_path)
-    else:
-        model.load_adapter(peft_model_path)
+    
+    # Directly wraps (or updates) your model with the LoRA adapter
+    model = PeftModel.from_pretrained(
+        model,
+        peft_model_path
+    )
     return model
+    # if not isinstance(model, PeftModel):
+    #     model = PeftModel.from_pretrained(model, peft_model_path)
+    # else:
+    #     model.load_adapter(peft_model_path)
+    # return model
 
 def merge_peft_into_base(model):
     """
@@ -322,6 +329,13 @@ for action in ['train', 'merge']:
         train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
         train_dataset_augment = train_dataset.augment(**train_aug_opts)
         train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
+
+
+        # >>> Here is the key step <<<
+        # Take only 10% of the entire list
+        ten_percent_size = int(0.1 * len(train_dataset_as_list))
+        train_dataset_as_list = train_dataset_as_list[:ten_percent_size]
+
 
         # Tokenize
         train_dataset_tokenized = load_tokenized_dataset(
