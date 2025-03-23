@@ -343,6 +343,15 @@ for action in ['train', 'merge']:
     if action == 'train':
         # load training data
         train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=4, sizes=[6], seed=42)
+        
+        # Take only 10% of the data
+        total_size = len(train_dataset)
+        subset_size = int(total_size * 0.1)
+        print(f"Total dataset size: {total_size}")
+        print(f"Using subset size: {subset_size}")
+        
+        # Randomly select 10% of the data
+        train_dataset = train_dataset.select(range(subset_size))
 
         # augment data set and transform to list
         train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
@@ -368,8 +377,8 @@ for action in ['train', 'merge']:
 
         # Setup training arguments with DeepSpeed
         training_args = TrainingArguments(
-            per_device_train_batch_size="auto",  # Increased batch size for A100
-            gradient_accumulation_steps="auto",  # No need for gradient accumulation
+            per_device_train_batch_size=4,  # Fixed batch size for A100
+            gradient_accumulation_steps=1,  # No gradient accumulation needed
             warmup_ratio=0.25,
             num_train_epochs=1,
             learning_rate=1e-4,
@@ -385,7 +394,7 @@ for action in ['train', 'merge']:
             report_to='none',
             deepspeed=ds_config,
             remove_unused_columns=False,
-            label_names=["labels", "input_ids", "attention_mask"]  # Add label names
+            label_names=["labels", "input_ids", "attention_mask"]
         )
 
         # Setup trainer
