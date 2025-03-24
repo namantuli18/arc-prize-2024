@@ -44,10 +44,15 @@ def format_prompt(train_examples, test_example):
     # Add training examples
     for i, example in enumerate(train_examples):
         if i < len(alphabet):
-            prompt += f"{alphabet[i]} {example['input']}\n{alphabet[i]} {example['output']}\n"
+            # Handle nested structure - example is an object with 'input' field
+            input_str = json.dumps(example["input"])
+            output_str = json.dumps(example["output"])
+            prompt += f"{alphabet[i]} {input_str}\n{alphabet[i]} {output_str}\n"
     
-    # Add test example
-    prompt += f"I {test_example['input']}\n+/-=O"
+    # Add test example - test_example is a list with one item
+    test_item = test_example[0]
+    input_str = json.dumps(test_item["input"])
+    prompt += f"I {input_str}\n+/-=O"
     
     return prompt
 
@@ -103,22 +108,34 @@ def process_dataset(model, tokenizer, challenges):
     print(f"Processing {total_tasks} tasks")
     
     for idx, (task_id, task_data) in enumerate(tqdm(challenges.items(), desc="Processing tasks")):
-        # Extract train and test examples
-        train_examples = task_data["train"]
-        test_example = task_data["test"]
-        
-        # Format prompt
-        prompt = format_prompt(train_examples, test_example)
-        
-        # Generate solution
-        response = generate_solution(model, tokenizer, prompt)
-        
-        # Store result
-        results[task_id] = response
-        
-        # Log progress occasionally
-        if idx % 10 == 0:
-            print(f"Task {idx+1}/{total_tasks}: Generated response for {task_id}")
+        try:
+            # Extract train and test examples
+            train_examples = task_data["train"]
+            test_example = task_data["test"]
+            
+            # Debug info
+            print(f"\nProcessing task {task_id}")
+            print(f"Train examples: {len(train_examples)}")
+            print(f"Test example: {len(test_example)}")
+            
+            # Format prompt
+            prompt = format_prompt(train_examples, test_example)
+            
+            # Generate solution
+            response = generate_solution(model, tokenizer, prompt)
+            
+            # Store result
+            results[task_id] = response
+            
+            # Log progress occasionally
+            if idx % 5 == 0 or idx < 5:
+                print(f"Task {idx+1}/{total_tasks}: Generated response for {task_id}")
+                print(f"Prompt excerpt: {prompt[:200]}...")
+                print(f"Response: {response[:100]}...")
+        except Exception as e:
+            print(f"Error processing task {task_id}: {e}")
+            print(f"Task data: {json.dumps(task_data, indent=2)[:500]}...")
+            continue
     
     return results
 
