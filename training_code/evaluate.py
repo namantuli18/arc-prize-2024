@@ -1,103 +1,73 @@
+
 import os
 import json
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from tqdm import tqdm
+from unsloth import FastLanguageModel
 from diskcache import Cache
+
 from arc_loader import ArcDataset
+from model_tools import load_unsloth_4bit
 from inference_tools import inference_run
 from selection import EvalTool
 
 # Paths
-model_path = os.path.join('pretrained_models', "DDP-LLama-ReArc-4GPU-Full_trial_dataset-merged")
-eval_challenges_path = os.path.join('input/arc-data/ARC-Data/eval/arc-prize-2024', 'arc-agi_evaluation_challenges_sample.json')
-eval_solutions_path = os.path.join('input/arc-data/ARC-Data/eval/arc-prize-2024', 'arc-agi_evaluation_solutions_sample.json')
+base_model = os.path.join('pretrained_models', "DDP-LLama-ReArc-4GPU-Full_trial_dataset-merged")
+#eval_challenges_path = os.path.join('input/arc-data/ARC-Data/eval/arc-prize-2024', 'arc-agi_evaluation_challenges_sample.json')
+#eval_solutions_path = os.path.join('input/arc-data/ARC-Data/eval/arc-prize-2024', 'arc-agi_evaluation_solutions_sample.json')
+arc_data_path = os.path.join('input/arc-data/ARC-Data/eval', 'arc-prize-2024')
 
 # Output paths
 output_path = 'output_evaluation'
 inference_cache = os.path.join(output_path, 'inference_cache')
 submission_file = os.path.join(output_path, 'submission.json')
+# load evaluation dataset
+arc_eval_set = ArcDataset.load_from_json(os.path.join(arc_data_path, 'arc-agi_evaluation_challenges.json'))
+arc_eval_set = arc_eval_set.load_solutions(os.path.join(arc_data_path, 'arc-agi_evaluation_solutions.json'))
 
-def load_model_and_tokenizer(model_path):
-    """Load the trained model and tokenizer."""
-    print(f"Loading model and tokenizer from {model_path}")
-    model = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
-        device_map="auto",
-        trust_remote_code=True,
-        use_cache=True  # Enable KV cache
-    )
-    
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_path,
-        trust_remote_code=True
-    )
-    
-    # Set model to evaluation mode
-    model.eval()
-    
-    return model, tokenizer
 
-def main():
-    # Create output directory
-    os.makedirs(output_path, exist_ok=True)
-    
-    # Load evaluation dataset
-    print("Loading evaluation dataset...")
-    arc_eval_set = ArcDataset.load_from_json(eval_challenges_path)
-    arc_eval_set = arc_eval_set.load_solutions(eval_solutions_path)
-    
-    # Load model and tokenizer
-    model, tokenizer = load_model_and_tokenizer(model_path)
-    
-    # Set formatting options
-    fmt_opts = dict(
-        preprompt='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjklmnpqrstuvwxyz',
-        query_beg='I',
-        reply_beg='\n+/-=O',
-        reply_end='\n' + tokenizer.eos_token,
-        lines_sep='\n',
-        max_tokens=128000,
-    )
-    
-    # Set up inference options
-    infer_aug_opts = dict(tp='all', rt='all', perm=True, shfl_ex=True, seed=10000)
-    infer_dataset = arc_eval_set.repeat(2).augment(**infer_aug_opts)
-    
-    # Set up caching with proper key handling
-    model_cache = Cache(inference_cache).memoize(
-        typed=True,
-        ignore=set(['model_tok', 'guess', 'past_key_values'])
-    )
-    
-    # Set up evaluation tool
-    eval_tool = EvalTool(n_guesses=2)
-    
-    # Run inference with proper cache handling
-    print("Running inference...")
-    inference_results = inference_run(
-        model_tok=(model, tokenizer),
-        fmt_opts=fmt_opts,
-        dataset=infer_dataset,
-        min_prob=0.1,
-        aug_score_opts=infer_aug_opts,
-        callback=eval_tool.process_result,
-        cache=model_cache,
-        max_new_tokens=512,  # Limit generation length
-    )
-    
-    # Write submission
-    print("Writing submission file...")
-    with open(submission_file, 'w') as f:
-        json.dump(arc_eval_set.get_submission(inference_results), f)
-    
-    # Validate submission
-    with open(submission_file, 'r') as f:
-        score = arc_eval_set.validate_submission(json.load(f))
-        print(f"Score for '{submission_file}':", score)
-    
-    print("Evaluation complete!")
+# # input paths
+# base_model = 'da-fr/Llama-3.2-3B-ARChitects-ReArc-bnb-4bit'  # auto-downloaded from huggingface.co
+# arc_data_path = os.path.join('input', 'arc-prize-2024')  # as on kaggle arc prize 2024
 
-if __name__ == "__main__":
-    main() 
+# output paths
+# output_path = 'output_evaluation_Llama-rearc_without_ttt'
+# inference_cache = os.path.join(output_path, 'inference_cache')
+# submission_file = os.path.join(output_path, 'submission.json')
+
+# load evaluation dataset
+# arc_eval_set = ArcDataset.load_from_json(os.path.join(arc_data_path, 'arc-agi_evaluation_challenges.json'))
+# arc_eval_set = arc_eval_set.load_solutions(os.path.join(arc_data_path, 'arc-agi_evaluation_solutions.json'))
+
+# load model
+model, tokenizer = load_unsloth_4bit(base_model)
+
+# set formatting options
+fmt_opts = dict(
+    preprompt='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjklmnpqrstuvwxyz',
+    query_beg='I',
+    reply_beg='\n+/-=O',
+    reply_end='\n' + tokenizer.eos_token,
+    lines_sep='\n',
+    max_tokens=128000,
+)
+
+# run inference
+FastLanguageModel.for_inference(model)
+infer_aug_opts = dict(tp='all', rt='all', perm=True, shfl_ex=True, seed=10000)
+infer_dataset = arc_eval_set.repeat(2).augment(**infer_aug_opts)
+model_cache = Cache(inference_cache).memoize(typed=True, ignore=set(['model_tok', 'guess']))
+eval_tool = EvalTool(n_guesses=2)
+inference_results = inference_run(
+    model_tok=(model, tokenizer),
+    fmt_opts=fmt_opts,
+    dataset=infer_dataset,
+    min_prob=0.1,
+    aug_score_opts=infer_aug_opts,
+    callback=eval_tool.process_result,
+    cache=model_cache,
+)
+
+# write submission
+with open(submission_file, 'w') as f:
+    json.dump(arc_eval_set.get_submission(inference_results), f)
+with open(submission_file, 'r') as f:
+    print(f"Score for '{submission_file}':", arc_eval_set.validate_submission(json.load(f)))
