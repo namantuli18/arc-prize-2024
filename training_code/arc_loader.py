@@ -58,47 +58,134 @@ class ArcDataset(object):
 
     # loader for Michael Hodel's ReArc https://github.com/neoneye/arc-dataset-collection
     @classmethod
-    def load_from_rearc(cls, path, n, sizes, seed, mix_datasets={}, shuffle=True):  # loader for ReArc
+    def load_from_rearc(cls, path, n, sizes, seed, mix_datasets={}, shuffle=True):
+        """
+        Loader for ReArc with reduced memory usage: 
+        reads each file, processes it, then deletes large lists.
+        """
         np.random.seed(seed)
         keys = [[] for _ in range(n)]
         challenge = {}
         solutions = {}
         sizes = list(sizes)
 
+        # 1. Read metadata
         with open(os.path.join(path, 'metadata.json')) as f:
             metadata = json.load(f)
 
-        for key in tqdm(sorted(metadata.keys()), desc="load dataset 're-arc'"):
-            with open(os.path.join(path, 'tasks', f'{key}.json')) as f:
-                tasks = np.random.permutation(json.load(f)).tolist()
+        # 2. Process each .json file in a loop, then delete the large `tasks` 
+        sorted_keys = sorted(metadata.keys())
+        for key in tqdm(sorted_keys, desc="load dataset 're-arc'"):
+            # Load tasks for just this one file
+            json_path = os.path.join(path, 'tasks', f'{key}.json')
+            with open(json_path, 'r') as f:
+                tasks = json.load(f)
 
+            # Shuffle/permute
+            tasks = np.random.permutation(tasks).tolist()
+
+            # Now fill in challenge/solutions
             next_sizes = []
-            for epoch in range(n):
-                if not len(next_sizes):
-                    next_sizes = np.random.permutation(sizes).tolist()
-                next_size_with_test = 1 + next_sizes.pop()
-                base_key = f'rearc-{key}{epoch:02x}'
-                keys[epoch].append(f'{base_key}_0')
-                challenge[base_key] = {'train': [], 'test': []}
-                solutions[base_key] = reply = []
-                for _ in range(next_size_with_test):
-                    if not len(tasks):
-                        raise RuntimeError('Not enough examples - generate more re-arc examples or reduce epochs.')
-                    challenge[base_key]['train'].append({k: v for k, v in tasks.pop().items()})
-                challenge[base_key]['test'].append(challenge[base_key]['train'].pop())
-                solutions[base_key].append(challenge[base_key]['test'][-1].pop('output'))
+            while tasks:  # as long as we have tasks left
+                for epoch in range(n):
+                    # Refill next_sizes if it's empty
+                    if not next_sizes:
+                        next_sizes = np.random.permutation(sizes).tolist()
+                    if not tasks:
+                        break  # no more tasks to pop
 
+                    next_size_with_test = 1 + next_sizes.pop()
+
+                    base_key = f'rearc-{key}{epoch:02x}'
+                    # We only append the first time we see this base_key
+                    # (So we don't repeatedly append the same base_key to keys[epoch].)
+                    if base_key not in challenge:
+                        keys[epoch].append(f'{base_key}_0')
+                        challenge[base_key] = {'train': [], 'test': []}
+                        solutions[base_key] = []
+
+                    # Fill `train`
+                    for _ in range(next_size_with_test):
+                        if not tasks:
+                            raise RuntimeError(
+                                'Not enough examples - generate more re-arc examples or reduce epochs.'
+                            )
+                        example = tasks.pop()
+                        # If there are unneeded fields in example, remove them to save memory
+                        challenge[base_key]['train'].append(example)
+
+                    # Move the last item of `train` to `test`
+                    challenge[base_key]['test'].append(challenge[base_key]['train'].pop())
+                    # Move 'output' out of test item into solutions
+                    last_test_item = challenge[base_key]['test'][-1]
+                    solutions[base_key].append(last_test_item.pop('output'))
+
+            # Delete the large tasks list and force a GC
+            del tasks
+            gc.collect()
+
+        # 3. Integrate optional mix_datasets
         for name, ds in mix_datasets.items():
             name = cls.base_key_replace_invalid_chars(name)
-            for epoch, ds_keys in enumerate(np.array_split(ds.keys, len(keys))):
+            # chunk out ds.keys over the n epochs
+            splitted = np.array_split(ds.keys, len(keys))
+            for epoch, ds_keys in enumerate(splitted):
                 keys[epoch].extend([f'{name}-{k}' for k in ds_keys])
-            challenge.update({f'{name}-{k}': v for k, v in ds.challenge.items()})
-            solutions.update({f'{name}-{k}': v for k, v in ds.solutions.items()})
+            for k, v in ds.challenge.items():
+                challenge[f'{name}-{k}'] = v
+            for k, v in ds.solutions.items():
+                solutions[f'{name}-{k}'] = v
 
+        # 4. Shuffle final keys if desired
         if shuffle:
-            keys = [np.random.permutation(epoch) for epoch in keys]
-        keys = [k for epoch in keys for k in epoch]
+            keys = [np.random.permutation(epoch).tolist() for epoch in keys]
+
+        # Flatten list-of-lists of keys
+        keys = [key for epoch_keys in keys for key in epoch_keys]
+
         return cls(keys=keys, challenge=challenge, solutions=solutions, is_orig=True)
+
+    # def load_from_rearc(cls, path, n, sizes, seed, mix_datasets={}, shuffle=True):  # loader for ReArc
+    #     np.random.seed(seed)
+    #     keys = [[] for _ in range(n)]
+    #     challenge = {}
+    #     solutions = {}
+    #     sizes = list(sizes)
+
+    #     with open(os.path.join(path, 'metadata.json')) as f:
+    #         metadata = json.load(f)
+
+    #     for key in tqdm(sorted(metadata.keys()), desc="load dataset 're-arc'"):
+    #         with open(os.path.join(path, 'tasks', f'{key}.json')) as f:
+    #             tasks = np.random.permutation(json.load(f)).tolist()
+
+    #         next_sizes = []
+    #         for epoch in range(n):
+    #             if not len(next_sizes):
+    #                 next_sizes = np.random.permutation(sizes).tolist()
+    #             next_size_with_test = 1 + next_sizes.pop()
+    #             base_key = f'rearc-{key}{epoch:02x}'
+    #             keys[epoch].append(f'{base_key}_0')
+    #             challenge[base_key] = {'train': [], 'test': []}
+    #             solutions[base_key] = reply = []
+    #             for _ in range(next_size_with_test):
+    #                 if not len(tasks):
+    #                     raise RuntimeError('Not enough examples - generate more re-arc examples or reduce epochs.')
+    #                 challenge[base_key]['train'].append({k: v for k, v in tasks.pop().items()})
+    #             challenge[base_key]['test'].append(challenge[base_key]['train'].pop())
+    #             solutions[base_key].append(challenge[base_key]['test'][-1].pop('output'))
+
+    #     for name, ds in mix_datasets.items():
+    #         name = cls.base_key_replace_invalid_chars(name)
+    #         for epoch, ds_keys in enumerate(np.array_split(ds.keys, len(keys))):
+    #             keys[epoch].extend([f'{name}-{k}' for k in ds_keys])
+    #         challenge.update({f'{name}-{k}': v for k, v in ds.challenge.items()})
+    #         solutions.update({f'{name}-{k}': v for k, v in ds.solutions.items()})
+
+    #     if shuffle:
+    #         keys = [np.random.permutation(epoch) for epoch in keys]
+    #     keys = [k for epoch in keys for k in epoch]
+    #     return cls(keys=keys, challenge=challenge, solutions=solutions, is_orig=True)
 
     # loader for neoneye's format, as used in https://github.com/neoneye/arc-dataset-collection
     @classmethod
