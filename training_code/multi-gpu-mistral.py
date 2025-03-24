@@ -22,7 +22,7 @@ base_model = 'chuanli11/Llama-3.2-3B-Instruct-uncensored'
 re_arc_path = os.path.join('input/arc-data/ARC-Data/input', 're_arc')
 # Output path
 #save_model_path = os.path.join('pretrained_models', "DDP-Mistral-Nemo-8B-ReArc")
-save_model_path = os.path.join('pretrained_models', "DDP-LLama-ReArc")
+save_model_path = os.path.join('pretrained_models', "DDP-LLama-ReArc-8GPU")
 
 def load_model_4bit(model_name_or_path):
     """
