@@ -18,7 +18,7 @@ base_model = 'nvidia/Mistral-NeMo-Minitron-8B-Base'  # auto-downloaded from hugg
 re_arc_path = os.path.join('input/arc-data/ARC-Data/input', 're_arc')  # https://github.com/michaelhodel/re-arc
 
 # Output path
-save_model_path = os.path.join('pretrained_models', "Mistral-Nemo-8B-ReArc")
+save_model_path = os.path.join('pretrained_models', "Multi-GPU-Mistral-Nemo-8B-ReArc")
 
 def load_model_4bit(model_name_or_path):
     """
