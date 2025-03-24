@@ -22,7 +22,7 @@ from numpy.random import randint
 from glob import glob
 from tqdm import tqdm
 from collections import OrderedDict
-
+import gc
 
 class ArcDataset(object):
     def __init__(self, challenge, solutions={}, keys=None, is_fake=False, is_orig=False):
@@ -57,8 +57,8 @@ class ArcDataset(object):
         return self.__class__(keys=self.keys, challenge=self.challenge, solutions=solutions, is_orig=self.is_orig)
 
     # loader for Michael Hodel's ReArc https://github.com/neoneye/arc-dataset-collection
-    
-    import gc
+
+
     @classmethod
     def load_from_rearc(cls, path, n, sizes, seed, mix_datasets={}, shuffle=True):
         """
