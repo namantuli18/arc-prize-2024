@@ -6,7 +6,8 @@
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
-#SBATCH --partition=short
+#SBATCH --gres=gpu:A100_40GB:1
+#SBATCH --partition=general
 
 # Activate conda environment
 source ~/.bashrc
