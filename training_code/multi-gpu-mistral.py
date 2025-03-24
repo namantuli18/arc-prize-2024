@@ -247,9 +247,23 @@ for action in ['train', 'merge']:
         train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
         train_dataset_augment = train_dataset.augment(**train_aug_opts)
         train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
-        # ten_percent_size = int(0.1 * len(train_dataset_as_list))
-        # train_dataset_as_list = train_dataset_as_list[:ten_percent_size]
-        train_dataset_tokenized = load_tokenized_dataset(train_dataset_as_list, tokenizer, max_length=fmt_opts['max_tokens'])
+        
+        # Reduce memory footprint by processing smaller chunks of data
+        chunk_size = 5000  # Process dataset in smaller chunks
+        total_size = len(train_dataset_as_list)
+        
+        # Tokenize in chunks to avoid OOM
+        tokenized_chunks = []
+        for i in range(0, total_size, chunk_size):
+            end_idx = min(i + chunk_size, total_size)
+            print(f"Tokenizing chunk {i//chunk_size + 1}/{(total_size + chunk_size - 1)//chunk_size}: items {i}-{end_idx}")
+            chunk = train_dataset_as_list[i:end_idx]
+            tokenized_chunk = load_tokenized_dataset(chunk, tokenizer, max_length=fmt_opts['max_tokens'])
+            tokenized_chunks.append(tokenized_chunk)
+        
+        # Combine chunks into final dataset
+        from datasets import concatenate_datasets
+        train_dataset_tokenized = concatenate_datasets(tokenized_chunks) if len(tokenized_chunks) > 1 else tokenized_chunks[0]
 
         print("Final tokenized dataset size:", len(train_dataset_tokenized))
 
