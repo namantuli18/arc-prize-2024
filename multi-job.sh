@@ -23,4 +23,4 @@ export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 
 # Run the training script using torchrun for DDP
-torchrun --nproc_per_node=2 training_code/multi-gpu-mistral.py
+torchrun --nproc_per_node=2  --master_port=29501 training_code/multi-gpu-mistral.py
