@@ -13,11 +13,13 @@ print(f"CUDA memory allocated: {torch.cuda.memory_allocated() / 1e9} GB")
 print(f"CUDA memory reserved: {torch.cuda.memory_reserved() / 1e9} GB")
 
 # Input paths
-base_model = 'nvidia/Mistral-NeMo-Minitron-8B-Base'  # auto-downloaded from huggingface.co
+#base_model = 'nvidia/Mistral-NeMo-Minitron-8B-Base'  # auto-downloaded from huggingface.co
+base_model = 'chuanli11/Llama-3.2-3B-Instruct-uncensored'
 re_arc_path = os.path.join('input/arc-data/ARC-Data/input', 're_arc')  # https://github.com/michaelhodel/re-arc
 
 # Output path
-save_model_path = os.path.join('pretrained_models', "Mistral-Nemo-8B-ReArc")
+#save_model_path = os.path.join('pretrained_models', "Mistral-Nemo-8B-ReArc")
+save_model_path = os.path.join('pretrained_models', "No-DDP-LLama-ReArc-1GPU-Full_trial_dataset")
 
 def load_model_4bit(model_name_or_path):
     """
@@ -333,8 +335,8 @@ for action in ['train', 'merge']:
 
         # >>> Here is the key step <<<
         # Take only 10% of the entire list
-        ten_percent_size = int(0.1 * len(train_dataset_as_list))
-        train_dataset_as_list = train_dataset_as_list[:ten_percent_size]
+        # ten_percent_size = int(0.1 * len(train_dataset_as_list))
+        # train_dataset_as_list = train_dataset_as_list[:ten_percent_size]
 
 
         # Tokenize
