@@ -31,6 +31,6 @@ echo "Python path: $(which python)"
 echo "Python version: $(python --version)"
 
 # Run inference
-python training_code/evaluate.py
+python training_code/evaluate_simple.py
 
 echo "Job finished at $(date)" 
