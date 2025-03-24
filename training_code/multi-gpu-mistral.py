@@ -183,24 +183,26 @@ class DebuggingDataCollator(InputMaskingDataCollator):
         # Use the parent collator to get a properly padded batch
         batch = super().__call__(features)
 
-        # How many tokens the embedding actually has
-        embedding_size = self.model.get_input_embeddings().weight.size(0)
+        # If wrapped in DataParallel, the "real" model is at self.model.module
+        actual_model = self.model.module if hasattr(self.model, "module") else self.model
+        
+        # Now you can safely get the embedding size
+        embedding_size = actual_model.get_input_embeddings().weight.size(0)
 
         # Check each token in input_ids
         for i, input_ids_example in enumerate(batch["input_ids"]):
             for j, token_id in enumerate(input_ids_example):
                 if token_id >= embedding_size or token_id < 0:
-                    # Decode the single out-of-range token
                     token_str = self.tokenizer.decode([token_id])
                     print(
                         f"Out-of-range token encountered: '{token_str}' "
                         f"(ID: {token_id}) at position {j} in batch item {i}. "
                         f"Embedding size is {embedding_size}."
                     )
-                    # Optionally raise an error so training stops immediately
                     raise ValueError("Encountered out-of-range token ID!")
-
+        
         return batch
+
 
 def setup_peft_model(model, r=256, lora_alpha=24, target_modules=None):
     """
