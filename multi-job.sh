@@ -25,4 +25,4 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 
 # Run the training script using torchrun for DDP
-torchrun --nproc_per_node=2 --master_port=29501 training_code/multi-gpu-mistral.py
+torchrun --nproc_per_node=4 --master_port=29501 training_code/multi-gpu-mistral.py
