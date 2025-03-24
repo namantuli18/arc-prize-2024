@@ -249,7 +249,7 @@ for action in ['train', 'merge']:
         train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
         
         # Reduce memory footprint by processing smaller chunks of data
-        chunk_size = 5000  # Process dataset in smaller chunks
+        chunk_size = 10000  # Process dataset in smaller chunks
         total_size = len(train_dataset_as_list)
         
         # Tokenize in chunks to avoid OOM
