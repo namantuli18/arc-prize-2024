@@ -1,6 +1,6 @@
 import os
 import torch
-import torch.nn as nn  ### ADDED
+import torch.nn as nn
 from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments
 from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model, PeftModel
 from datasets import Dataset
@@ -128,81 +128,33 @@ def load_tokenized_dataset(dataset_list, tokenizer, max_length=2048):
     
     return tokenized_dataset
 
-class InputMaskingDataCollator:
+###########################################################################
+#                 Simplified Data Collator with Debug Prints              #
+###########################################################################
+class SimpleDataCollator:
     """
-    Data collator that masks certain parts of the input if needed.
+    A minimal data collator that just pads inputs and sets labels = input_ids.
+    Includes debug print statements for diagnosing stalls.
     """
-    def __init__(self, tokenizer, instruction_template="I", response_template="\n+/-=O", mlm=False, mask_first_n_examples=1):
+    def __init__(self, tokenizer):
         self.tokenizer = tokenizer
-        self.instruction_template = instruction_template
-        self.response_template = response_template
-        self.mlm = mlm
-        self.mask_first_n_examples = mask_first_n_examples
-    
+
     def __call__(self, features):
-        if not isinstance(features, list) or len(features) == 0 or 'input_ids' not in features[0]:
-            raise ValueError("Features must be a list of dictionaries with 'input_ids'")
-            
+        print(f"[Collator] Received {len(features)} features.")
         batch = self.tokenizer.pad(
             features,
             padding=True,
             return_tensors="pt",
         )
-        
-        if not self.mlm:
-            batch["labels"] = batch["input_ids"].clone()
-            
-            for i in range(len(features)):
-                if i >= len(batch["input_ids"]):
-                    continue
-                text = self.tokenizer.decode(batch["input_ids"][i])
-                
-                instr_pos = text.find(self.instruction_template)
-                resp_pos = text.find(self.response_template)
-                
-                # Mask out labels for the instruction part
-                if instr_pos != -1 and resp_pos != -1 and i < self.mask_first_n_examples:
-                    instr_token_pos = len(self.tokenizer.encode(text[:instr_pos])) - 1
-                    resp_token_pos = len(self.tokenizer.encode(text[:resp_pos])) - 1
-                    if 0 <= instr_token_pos < resp_token_pos < batch["labels"][i].shape[0]:
-                        batch["labels"][i, instr_token_pos:resp_token_pos] = -100
-        
+
+        # For causal LM, set labels = input_ids
+        batch["labels"] = batch["input_ids"].clone()
+
+        # Print shapes to see how big each batch is
+        print(f"[Collator] Batch input_ids shape: {batch['input_ids'].shape}")
+        print(f"[Collator] Returning batch to Trainer.")
         return batch
-    
-
-class DebuggingDataCollator(InputMaskingDataCollator):
-    """
-    A debugging collator that intercepts out-of-range token IDs and prints them
-    before they cause the "device-side assert" in the embedding lookup.
-    """
-    def __init__(self, tokenizer, model, **kwargs):
-        super().__init__(tokenizer, **kwargs)
-        self.model = model
-
-    def __call__(self, features):
-        # Use the parent collator to get a properly padded batch
-        batch = super().__call__(features)
-
-        # If wrapped in DataParallel, the "real" model is at self.model.module
-        actual_model = self.model.module if hasattr(self.model, "module") else self.model
-        
-        # Now you can safely get the embedding size
-        embedding_size = actual_model.get_input_embeddings().weight.size(0)
-
-        # Check each token in input_ids
-        for i, input_ids_example in enumerate(batch["input_ids"]):
-            for j, token_id in enumerate(input_ids_example):
-                if token_id >= embedding_size or token_id < 0:
-                    token_str = self.tokenizer.decode([token_id])
-                    print(
-                        f"Out-of-range token encountered: '{token_str}' "
-                        f"(ID: {token_id}) at position {j} in batch item {i}. "
-                        f"Embedding size is {embedding_size}."
-                    )
-                    raise ValueError("Encountered out-of-range token ID!")
-        
-        return batch
-
+###########################################################################
 
 def setup_peft_model(model, r=256, lora_alpha=24, target_modules=None):
     """
@@ -265,7 +217,9 @@ def merge_peft_into_base(model):
     model = model.merge_and_unload()
     return model
 
-# Main execution logic
+###########################################################################
+#                          Main Execution Logic                           #
+###########################################################################
 for action in ['train', 'merge']:
     if action == 'train' and os.path.exists(f'{save_model_path}-lora'):
         continue
@@ -273,6 +227,7 @@ for action in ['train', 'merge']:
         continue
 
     # Load base model & reduce embedding size
+    print(f"\n=== [ACTION: {action}] Loading base model ===")
     model, tokenizer = load_model_4bit(base_model)
     keep_tok = list('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?.:,;*+/-=') + tokenizer.tokenize('\n')
     keep_single_char_tokens(model, tokenizer, keep=keep_tok, remove_unk=True)
@@ -323,23 +278,23 @@ for action in ['train', 'merge']:
     ##############################################################################
     #               DataParallel Wrapping (for multi-GPU data parallel)          #
     ##############################################################################
-    # If you have more than one GPU available, wrap the model in nn.DataParallel
     if torch.cuda.device_count() > 1:
         print(f"Using DataParallel on {torch.cuda.device_count()} GPUs.")
-        model = nn.DataParallel(model)  ### ADDED
+        model = nn.DataParallel(model)
     
     # Move to GPU
-    model.cuda()  ### CHANGED to .cuda() for consistency with DataParallel
+    model.cuda()
     ##############################################################################
     
     if action == 'train':
+        print("=== Starting TRAINING phase ===")
         # Load training data
         train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=4, sizes=[6], seed=42)
         train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
         train_dataset_augment = train_dataset.augment(**train_aug_opts)
         train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
 
-        # Take only 10% of the entire list for demo
+        # For demo, take only 10% of the entire list
         ten_percent_size = int(0.1 * len(train_dataset_as_list))
         train_dataset_as_list = train_dataset_as_list[:ten_percent_size]
 
@@ -350,18 +305,11 @@ for action in ['train', 'merge']:
             max_length=fmt_opts['max_tokens']
         )
         
-        # Collator
+        # Very simple data collator (with debug prints)
         tokenizer.padding_side = 'right'
-        debug_data_collator = DebuggingDataCollator(
-            tokenizer=tokenizer,
-            model=model,
-            instruction_template="I",
-            response_template="\n+/-=O",
-            mlm=False,
-            mask_first_n_examples=1,
-        )
+        simple_data_collator = SimpleDataCollator(tokenizer=tokenizer)
 
-        # TrainingArguments (no DeepSpeed)
+        # TrainingArguments
         training_args = TrainingArguments(
             per_device_train_batch_size=1,
             gradient_accumulation_steps=2,
@@ -370,7 +318,7 @@ for action in ['train', 'merge']:
             learning_rate=1e-4,
             fp16=not torch.cuda.is_bf16_supported(),
             bf16=torch.cuda.is_bf16_supported(),
-            logging_steps=10,
+            logging_steps=1,  # More frequent logging to see progress
             optim="adamw_8bit",
             weight_decay=0.0,
             lr_scheduler_type='cosine',
@@ -381,22 +329,34 @@ for action in ['train', 'merge']:
             remove_unused_columns=False,
         )
 
+        # Create Trainer
         trainer = Trainer(
             model=model,
             tokenizer=tokenizer,
             train_dataset=train_dataset_tokenized,
-            data_collator=debug_data_collator,
+            data_collator=simple_data_collator,
             args=training_args,
         )
+
+        # Print out a debug message before training
+        print("[Trainer] About to call trainer.train()...")
 
         # Train
         trainer.train()
         
+        # Print debug after training completes
+        print("[Trainer] Training finished.")
+        
         # Save LoRA adapter
+        print("[Trainer] Saving LoRA adapter...")
         save_model_and_tokenizer(f'{save_model_path}-lora', model, tokenizer)
 
     if action == 'merge':
+        print("=== Starting MERGE phase ===")
         # Load LoRA weights and merge
+        print("[Merge] Loading PEFT state...")
         model = load_peft_state(model, f'{save_model_path}-lora')
+        print("[Merge] Merging LoRA into base model...")
         model = merge_peft_into_base(model)
+        print("[Merge] Saving merged model...")
         save_model_and_tokenizer(f'{save_model_path}-merged', model, tokenizer)
