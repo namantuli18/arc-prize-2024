@@ -4,7 +4,6 @@ import torch
 import numpy as np
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from tqdm import tqdm
-from arc_loader import ArcDataset
 
 # Paths
 model_path = os.path.join('pretrained_models', "DDP-LLama-ReArc-4GPU-Full_trial_dataset-merged")
@@ -78,18 +77,38 @@ def generate_solution(model, tokenizer, prompt, max_new_tokens=512):
     
     return response
 
-def process_dataset(model, tokenizer, eval_set):
+def load_dataset(challenges_path, solutions_path=None):
+    """Load the dataset directly from JSON files."""
+    # Load challenges
+    with open(challenges_path, 'r') as f:
+        challenges = json.load(f)
+    
+    # Load solutions if provided
+    solutions = None
+    if solutions_path:
+        try:
+            with open(solutions_path, 'r') as f:
+                solutions = json.load(f)
+        except Exception as e:
+            print(f"Warning: Could not load solutions: {e}")
+    
+    return challenges, solutions
+
+def process_dataset(model, tokenizer, challenges):
     """Process all examples in the evaluation dataset."""
     results = {}
     
-    for task_idx, task in enumerate(tqdm(eval_set.tasks, desc="Processing tasks")):
-        task_id = task.id
+    # Iterate through the challenges dictionary
+    total_tasks = len(challenges)
+    print(f"Processing {total_tasks} tasks")
+    
+    for idx, (task_id, task_data) in enumerate(tqdm(challenges.items(), desc="Processing tasks")):
+        # Extract train and test examples
+        train_examples = task_data["train"]
+        test_example = task_data["test"]
         
-        # Format prompt with training examples and test example
-        prompt = format_prompt(
-            train_examples=[{"input": ex.input, "output": ex.output} for ex in task.train],
-            test_example={"input": task.test.input}
-        )
+        # Format prompt
+        prompt = format_prompt(train_examples, test_example)
         
         # Generate solution
         response = generate_solution(model, tokenizer, prompt)
@@ -98,26 +117,38 @@ def process_dataset(model, tokenizer, eval_set):
         results[task_id] = response
         
         # Log progress occasionally
-        if task_idx % 10 == 0:
-            print(f"Task {task_idx+1}/{len(eval_set.tasks)}: Generated response for {task_id}")
+        if idx % 10 == 0:
+            print(f"Task {idx+1}/{total_tasks}: Generated response for {task_id}")
     
     return results
+
+def validate_submission(submission, solutions):
+    """Simple validation function to check if predictions match solutions."""
+    if not solutions:
+        return "No solutions available for validation"
+    
+    correct = 0
+    for task_id, solution in solutions.items():
+        if task_id in submission and submission[task_id] == solution:
+            correct += 1
+    
+    score = correct / len(solutions) if solutions else 0
+    return f"Score: {correct}/{len(solutions)} = {score:.3f}"
 
 def main():
     # Create output directory
     os.makedirs(output_path, exist_ok=True)
     
-    # Load evaluation dataset
+    # Load evaluation dataset directly from JSON
     print("Loading evaluation dataset...")
-    arc_eval_set = ArcDataset.load_from_json(eval_challenges_path)
-    arc_eval_set = arc_eval_set.load_solutions(eval_solutions_path)
+    challenges, solutions = load_dataset(eval_challenges_path, eval_solutions_path)
     
     # Load model and tokenizer
     model, tokenizer = load_model_and_tokenizer(model_path)
     
     # Process dataset
     print("Processing evaluation dataset...")
-    results = process_dataset(model, tokenizer, arc_eval_set)
+    results = process_dataset(model, tokenizer, challenges)
     
     # Save results
     print("Saving results...")
@@ -125,13 +156,9 @@ def main():
         json.dump(results, f, indent=2)
     
     # Validate submission if possible
-    try:
-        with open(submission_file, 'r') as f:
-            submission = json.load(f)
-            score = arc_eval_set.validate_submission(submission)
-            print(f"Score: {score}")
-    except Exception as e:
-        print(f"Could not validate submission: {e}")
+    if solutions:
+        score = validate_submission(results, solutions)
+        print(score)
     
     print(f"Evaluation complete! Results saved to {submission_file}")
 
