@@ -68,8 +68,7 @@ def main():
     # Set up caching with proper key handling
     model_cache = Cache(inference_cache).memoize(
         typed=True,
-        ignore=set(['model_tok', 'guess', 'past_key_values']),
-        key=lambda *args, **kwargs: str(args) + str({k: v for k, v in kwargs.items() if k not in ['model_tok', 'guess', 'past_key_values']})
+        ignore=set(['model_tok', 'guess', 'past_key_values'])
     )
     
     # Set up evaluation tool
