@@ -84,7 +84,6 @@ def main():
         aug_score_opts=infer_aug_opts,
         callback=eval_tool.process_result,
         cache=model_cache,
-        use_cache=True,  # Enable KV cache
         max_new_tokens=512,  # Limit generation length
     )
     
