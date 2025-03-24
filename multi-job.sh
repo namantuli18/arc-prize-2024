@@ -7,7 +7,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --gres=gpu:A100_40GB:4  # Request 4 GPUs
+#SBATCH --gres=gpu:A100_40GB:8  # Request 4 GPUs
 #SBATCH --partition=general
 
 # Activate conda environment
@@ -25,4 +25,4 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 
 # Run the training script using torchrun for DDP
-torchrun --nproc_per_node=4 --master_port=29501 training_code/multi-gpu-mistral.py
+torchrun --nproc_per_node=8 --master_port=29501 training_code/multi-gpu-mistral.py
