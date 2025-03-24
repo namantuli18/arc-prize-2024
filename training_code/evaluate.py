@@ -25,13 +25,17 @@ def load_model_and_tokenizer(model_path):
         model_path,
         torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
         device_map="auto",
-        trust_remote_code=True
+        trust_remote_code=True,
+        use_cache=True  # Enable KV cache
     )
     
     tokenizer = AutoTokenizer.from_pretrained(
         model_path,
         trust_remote_code=True
     )
+    
+    # Set model to evaluation mode
+    model.eval()
     
     return model, tokenizer
 
@@ -61,13 +65,17 @@ def main():
     infer_aug_opts = dict(tp='all', rt='all', perm=True, shfl_ex=True, seed=10000)
     infer_dataset = arc_eval_set.repeat(2).augment(**infer_aug_opts)
     
-    # Set up caching
-    model_cache = Cache(inference_cache).memoize(typed=True, ignore=set(['model_tok', 'guess']))
+    # Set up caching with proper key handling
+    model_cache = Cache(inference_cache).memoize(
+        typed=True,
+        ignore=set(['model_tok', 'guess', 'past_key_values']),
+        key=lambda *args, **kwargs: str(args) + str({k: v for k, v in kwargs.items() if k not in ['model_tok', 'guess', 'past_key_values']})
+    )
     
     # Set up evaluation tool
     eval_tool = EvalTool(n_guesses=2)
     
-    # Run inference
+    # Run inference with proper cache handling
     print("Running inference...")
     inference_results = inference_run(
         model_tok=(model, tokenizer),
@@ -77,6 +85,8 @@ def main():
         aug_score_opts=infer_aug_opts,
         callback=eval_tool.process_result,
         cache=model_cache,
+        use_cache=True,  # Enable KV cache
+        max_new_tokens=512,  # Limit generation length
     )
     
     # Write submission
