@@ -22,7 +22,7 @@ base_model = 'chuanli11/Llama-3.2-3B-Instruct-uncensored'
 re_arc_path = os.path.join('input/arc-data/ARC-Data/input', 're_arc')
 # Output path
 #save_model_path = os.path.join('pretrained_models', "DDP-Mistral-Nemo-8B-ReArc")
-save_model_path = os.path.join('pretrained_models', "DDP-LLama-ReArc-4GPU-Full_trial_dataset")
+save_model_path = os.path.join('pretrained_models', "DDP-LLama-ReArc-4GPU-Full_dataset")
 
 def load_model_4bit(model_name_or_path):
     """
@@ -241,7 +241,9 @@ for action in ['train', 'merge']:
 
     if action == 'train':
         print("=== Starting TRAINING phase ===")
-        train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=4, sizes=[6], seed=42)
+        #train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=4, sizes=[6], seed=42)
+        train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=368, sizes=[6], seed=42)
+        
         train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
         train_dataset_augment = train_dataset.augment(**train_aug_opts)
         train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
