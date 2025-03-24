@@ -7,7 +7,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --gres=gpu:A100_40GB:2  # Request 2 GPUs
+#SBATCH --gres=gpu:A100_80GB:2  # Request 2 GPUs
 #SBATCH --partition=general
 
 # Activate conda environment
