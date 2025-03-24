@@ -1,0 +1,78 @@
+(ft-llm) [jakeb@babel-login-2 logs]$ cat arc_train_4432168.err
+W0323 22:42:28.697732 987189 site-packages/torch/distributed/run.py:792] 
+W0323 22:42:28.697732 987189 site-packages/torch/distributed/run.py:792] *****************************************
+W0323 22:42:28.697732 987189 site-packages/torch/distributed/run.py:792] Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+W0323 22:42:28.697732 987189 site-packages/torch/distributed/run.py:792] *****************************************
+Loading checkpoint shards: 100%|██████████| 4/4 [00:17<00:00,  4.25s/it]
+Loading checkpoint shards: 100%|██████████| 4/4 [00:16<00:00,  4.21s/it]
+The new embeddings will be initialized from a multivariate normal distribution that has old embeddings' mean and covariance. As described in this article: https://nlp.stanford.edu/~johnhew/vocab-expansion.html. To disable this, use `mean_resizing=False`
+The new embeddings will be initialized from a multivariate normal distribution that has old embeddings' mean and covariance. As described in this article: https://nlp.stanford.edu/~johnhew/vocab-expansion.html. To disable this, use `mean_resizing=False`
+The new lm_head weights will be initialized from a multivariate normal distribution that has old embeddings' mean and covariance. As described in this article: https://nlp.stanford.edu/~johnhew/vocab-expansion.html. To disable this, use `mean_resizing=False`
+The new lm_head weights will be initialized from a multivariate normal distribution that has old embeddings' mean and covariance. As described in this article: https://nlp.stanford.edu/~johnhew/vocab-expansion.html. To disable this, use `mean_resizing=False`
+load dataset 're-arc': 100%|██████████| 400/400 [03:36<00:00,  1.85it/s]
+load dataset 're-arc': 100%|██████████| 400/400 [03:36<00:00,  1.85it/s]
+convert dataset: 100%|██████████| 1600/1600 [00:04<00:00, 380.01it/s]
+convert dataset: 100%|██████████| 1600/1600 [00:04<00:00, 375.93it/s]
+Tokenizing texts: 100%|██████████| 160/160 [00:01<00:00, 113.33 examples/s]
+/home/jakeb/arc-prize-2024/training_code/multi-gpu-mistral.py:274: FutureWarning: `tokenizer` is deprecated and will be removed in version 5.0.0 for `Trainer.__init__`. Use `processing_class` instead.
+  trainer = Trainer(
+Tokenizing texts: 100%|██████████| 160/160 [00:01<00:00, 124.67 examples/s]
+/home/jakeb/arc-prize-2024/training_code/multi-gpu-mistral.py:274: FutureWarning: `tokenizer` is deprecated and will be removed in version 5.0.0 for `Trainer.__init__`. Use `processing_class` instead.
+  trainer = Trainer(
+No label_names provided for model class `PeftModelForCausalLM`. Since `PeftModel` hides base models input arguments, if label_names is not given, label_names can't be set automatically within `Trainer`. Note that empty label_names list will be used instead.
+No label_names provided for model class `PeftModelForCausalLM`. Since `PeftModel` hides base models input arguments, if label_names is not given, label_names can't be set automatically within `Trainer`. Note that empty label_names list will be used instead.
+  0%|          | 0/40 [00:00<?, ?it/s]You're using a PreTrainedTokenizerFast tokenizer. Please note that with a fast tokenizer, using the `__call__` method is faster than using a method to encode the text followed by a call to the `pad` method to get a padded encoding.
+You're using a PreTrainedTokenizerFast tokenizer. Please note that with a fast tokenizer, using the `__call__` method is faster than using a method to encode the text followed by a call to the `pad` method to get a padded encoding.
+`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`.
+`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`.
+ 12%|█▎        | 5/40 [00:46<05:06,  8.77s/it][rank0]: Traceback (most recent call last):
+[rank0]:   File "/home/jakeb/arc-prize-2024/training_code/multi-gpu-mistral.py", line 283, in <module>
+[rank0]:     trainer.train()
+[rank0]:   File "/home/jakeb/miniconda3/envs/ft-llm/lib/python3.9/site-packages/transformers/trainer.py", line 2241, in train
+[rank0]:     return inner_training_loop(
+[rank0]:   File "/home/jakeb/miniconda3/envs/ft-llm/lib/python3.9/site-packages/transformers/trainer.py", line 2548, in _inner_training_loop
+[rank0]:     tr_loss_step = self.training_step(model, inputs, num_items_in_batch)
+[rank0]:   File "/home/jakeb/miniconda3/envs/ft-llm/lib/python3.9/site-packages/transformers/trainer.py", line 3740, in training_step
+[rank0]:     self.accelerator.backward(loss, **kwargs)
+[rank0]:   File "/home/jakeb/miniconda3/envs/ft-llm/lib/python3.9/site-packages/accelerate/accelerator.py", line 2359, in backward
+[rank0]:     loss.backward(**kwargs)
+[rank0]:   File "/home/jakeb/miniconda3/envs/ft-llm/lib/python3.9/site-packages/torch/_tensor.py", line 626, in backward
+[rank0]:     torch.autograd.backward(
+[rank0]:   File "/home/jakeb/miniconda3/envs/ft-llm/lib/python3.9/site-packages/torch/autograd/__init__.py", line 347, in backward
+[rank0]:     _engine_run_backward(
+[rank0]:   File "/home/jakeb/miniconda3/envs/ft-llm/lib/python3.9/site-packages/torch/autograd/graph.py", line 823, in _engine_run_backward
+[rank0]:     return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+[rank0]: torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.97 GiB. GPU 0 has a total capacity of 39.50 GiB of which 2.52 GiB is free. Including non-PyTorch memory, this process has 36.97 GiB memory in use. Of the allocated memory 32.57 GiB is allocated by PyTorch, and 3.01 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+ 12%|█▎        | 5/40 [00:55<06:27, 11.08s/it]
+W0323 22:47:54.078609 987189 site-packages/torch/distributed/elastic/multiprocessing/api.py:897] Sending process 987196 closing signal SIGTERM
+E0323 22:47:54.645346 987189 site-packages/torch/distributed/elastic/multiprocessing/api.py:869] failed (exitcode: 1) local_rank: 0 (pid: 987195) of binary: /home/jakeb/miniconda3/envs/ft-llm/bin/python
+Traceback (most recent call last):
+  File "/home/jakeb/miniconda3/envs/ft-llm/bin/torchrun", line 8, in <module>
+    sys.exit(main())
+  File "/home/jakeb/miniconda3/envs/ft-llm/lib/python3.9/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 355, in wrapper
+    return f(*args, **kwargs)
+  File "/home/jakeb/miniconda3/envs/ft-llm/lib/python3.9/site-packages/torch/distributed/run.py", line 918, in main
+    run(args)
+  File "/home/jakeb/miniconda3/envs/ft-llm/lib/python3.9/site-packages/torch/distributed/run.py", line 909, in run
+    elastic_launch(
+  File "/home/jakeb/miniconda3/envs/ft-llm/lib/python3.9/site-packages/torch/distributed/launcher/api.py", line 138, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+  File "/home/jakeb/miniconda3/envs/ft-llm/lib/python3.9/site-packages/torch/distributed/launcher/api.py", line 269, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+============================================================
+training_code/multi-gpu-mistral.py FAILED
+------------------------------------------------------------
+Failures:
+  <NO_OTHER_FAILURES>
+------------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2025-03-23_22:47:54
+  host      : babel-15-20.ib
+  rank      : 0 (local_rank: 0)
+  exitcode  : 1 (pid: 987195)
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+============================================================
+(ft-llm) [jakeb@babel-login-2 logs]$ 
