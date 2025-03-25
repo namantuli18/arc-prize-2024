@@ -5,7 +5,6 @@ from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model, Pe
 from datasets import Dataset
 
 from arc_loader import ArcDataset
-from arc_loader import chunked_load_from_rearc  # <--- NEW
 
 
 # Set the local rank for DDP from the environment variable (default to 0 if not set)
@@ -217,158 +216,46 @@ def merge_peft_into_base(model):
     model = model.merge_and_unload()
     return model
 
-# ######################################################################
-# #                         MAIN EXECUTION LOGIC                       #
-# ######################################################################
-# for action in ['train', 'merge']:
-#     if action == 'train' and os.path.exists(f'{save_model_path}-lora'):
-#         continue
-#     if action == 'merge' and os.path.exists(f'{save_model_path}-merged'):
-#         continue
-
-#     print(f"\n=== [ACTION: {action}] Loading base model ===")
-#     model, tokenizer = load_model_4bit(base_model)
-#     keep_tok = list('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?.:,;*+/-=') + tokenizer.tokenize('\n')
-#     keep_single_char_tokens(model, tokenizer, keep=keep_tok, remove_unk=True)
-
-#     fmt_opts = dict(
-#         preprompt='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjklmnpqrstuvwxyz',
-#         query_beg='I',
-#         reply_beg='\n+/-=O',
-#         reply_end='\n' + tokenizer.eos_token,
-#         lines_sep='\n',
-#         max_tokens=8192,
-#     )
-
-#     print("Before re-mapping:")
-#     print(" Special tokens map:", tokenizer.special_tokens_map)
-#     print(" bos_token:", tokenizer.bos_token)
-#     print(" bos_token_id:", tokenizer.bos_token_id)
-
-#     if tokenizer.bos_token == "<|begin_of_text|>":
-#         tokenizer.bos_token = None
-
-#     tokenizer.bos_token = "<bos>"
-#     tokenizer.add_special_tokens({"bos_token": "<bos>"})
-#     model.config.bos_token_id = tokenizer.bos_token_id
-#     model.resize_token_embeddings(len(tokenizer))
-
-#     print("\nAfter re-mapping:")
-#     print(" Special tokens map:", tokenizer.special_tokens_map)
-#     print(" bos_token:", tokenizer.bos_token)
-#     print(" bos_token_id:", tokenizer.bos_token_id)
-
-#     lora_layers = [
-#         'q_proj','k_proj','v_proj','o_proj',
-#         'gate_proj','up_proj','down_proj','embed_tokens','lm_head'
-#     ]
-#     model = setup_peft_model(model, r=256, lora_alpha=24, target_modules=lora_layers)
-
-#     # No need for explicit model.cuda() here because the model was loaded on the correct device via device_map
-
-#     if action == 'train':
-#         print("=== Starting TRAINING phase ===")
-#         train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=368, sizes=[6], seed=42)
-#        # train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=368, sizes=[6], seed=42)
-
-#         train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
-#         train_dataset_augment = train_dataset.augment(**train_aug_opts)
-#         train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
-        
-#         # Reduce memory footprint by processing smaller chunks of data
-#         chunk_size = 10000  # Process dataset in smaller chunks
-#         total_size = len(train_dataset_as_list)
-        
-#         # Tokenize in chunks to avoid OOM
-#         tokenized_chunks = []
-#         for i in range(0, total_size, chunk_size):
-#             end_idx = min(i + chunk_size, total_size)
-#             print(f"Tokenizing chunk {i//chunk_size + 1}/{(total_size + chunk_size - 1)//chunk_size}: items {i}-{end_idx}")
-#             chunk = train_dataset_as_list[i:end_idx]
-#             tokenized_chunk = load_tokenized_dataset(chunk, tokenizer, max_length=fmt_opts['max_tokens'])
-#             tokenized_chunks.append(tokenized_chunk)
-        
-#         # Combine chunks into final dataset
-#         from datasets import concatenate_datasets
-#         train_dataset_tokenized = concatenate_datasets(tokenized_chunks) if len(tokenized_chunks) > 1 else tokenized_chunks[0]
-
-#         print("Final tokenized dataset size:", len(train_dataset_tokenized))
-
-#         data_collator = SimpleDataCollator(tokenizer)
-
-#         training_args = TrainingArguments(
-#             per_device_train_batch_size=1,
-#             gradient_accumulation_steps=2,
-#             warmup_ratio=0.25,
-#             num_train_epochs=1,
-#             learning_rate=1e-4,
-#             fp16=not torch.cuda.is_bf16_supported(),
-#             bf16=torch.cuda.is_bf16_supported(),
-#             logging_steps=1,
-#             optim="adamw_8bit",
-#             weight_decay=0.0,
-#             lr_scheduler_type='cosine',
-#             seed=42,
-#             output_dir='tmp_output',
-#             save_strategy='no',
-#             report_to='none',
-#             remove_unused_columns=False,
-#             ddp_find_unused_parameters=False,  
-#         )
-
-#         trainer = Trainer(
-#             model=model,
-#             tokenizer=tokenizer,
-#             train_dataset=train_dataset_tokenized,
-#             data_collator=data_collator,
-#             args=training_args,
-#         )
-
-#         print("[Trainer] About to call trainer.train() under DDP.")
-#         trainer.train()
-#         print("[Trainer] Training finished.")
-
-#         save_model_and_tokenizer(f'{save_model_path}-lora', model, tokenizer)
-
-#     if action == 'merge':
-#         print("=== Starting MERGE phase ===")
-#         model = load_peft_state(model, f'{save_model_path}-lora')
-#         model = merge_peft_into_base(model)
-#         save_model_and_tokenizer(f'{save_model_path}-merged', model, tokenizer)
-
-
 ######################################################################
 #                         MAIN EXECUTION LOGIC                       #
 ######################################################################
 for action in ['train', 'merge']:
-    if action == 'train' and os.path.exists('pretrained_models/LLama-ReArc-lora'):
+    if action == 'train' and os.path.exists(f'{save_model_path}-lora'):
         continue
-    if action == 'merge' and os.path.exists('pretrained_models/LLama-ReArc-merged'):
+    if action == 'merge' and os.path.exists(f'{save_model_path}-merged'):
         continue
 
     print(f"\n=== [ACTION: {action}] Loading base model ===")
-    model, tokenizer = load_model_4bit("chuanli11/Llama-3.2-3B-Instruct-uncensored")
-
+    model, tokenizer = load_model_4bit(base_model)
     keep_tok = list('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?.:,;*+/-=') + tokenizer.tokenize('\n')
     keep_single_char_tokens(model, tokenizer, keep=keep_tok, remove_unk=True)
 
-    # Example formatting options, used in the chunked loader if desired
     fmt_opts = dict(
         preprompt='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjklmnpqrstuvwxyz',
         query_beg='I',
         reply_beg='\n+/-=O',
-        reply_end='\n' + (tokenizer.eos_token or ''),
+        reply_end='\n' + tokenizer.eos_token,
         lines_sep='\n',
         max_tokens=8192,
     )
 
-    # Remap bos_token
+    print("Before re-mapping:")
+    print(" Special tokens map:", tokenizer.special_tokens_map)
+    print(" bos_token:", tokenizer.bos_token)
+    print(" bos_token_id:", tokenizer.bos_token_id)
+
     if tokenizer.bos_token == "<|begin_of_text|>":
         tokenizer.bos_token = None
+
     tokenizer.bos_token = "<bos>"
     tokenizer.add_special_tokens({"bos_token": "<bos>"})
     model.config.bos_token_id = tokenizer.bos_token_id
     model.resize_token_embeddings(len(tokenizer))
+
+    print("\nAfter re-mapping:")
+    print(" Special tokens map:", tokenizer.special_tokens_map)
+    print(" bos_token:", tokenizer.bos_token)
+    print(" bos_token_id:", tokenizer.bos_token_id)
 
     lora_layers = [
         'q_proj','k_proj','v_proj','o_proj',
@@ -376,38 +263,47 @@ for action in ['train', 'merge']:
     ]
     model = setup_peft_model(model, r=256, lora_alpha=24, target_modules=lora_layers)
 
+    # No need for explicit model.cuda() here because the model was loaded on the correct device via device_map
+
     if action == 'train':
         print("=== Starting TRAINING phase ===")
+        train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=300, sizes=[6], seed=42)
+       # train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=368, sizes=[6], seed=42)
 
-        # ================================
-        # REMOVED (Old approach):
-        #   train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=368, sizes=[6], seed=42)
-        #   train_dataset_augment = train_dataset.augment(...)
-        #   train_dataset_as_list = train_dataset_augment.as_list(...)
-        #
-        #   for i in range(0, len(train_dataset_as_list), chunk_size):
-        #       ...
-        # ================================
+        train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
+        train_dataset_augment = train_dataset.augment(**train_aug_opts)
+        train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
+        
+        # Reduce memory footprint by processing smaller chunks of data
+        chunk_size = 10000  # Process dataset in smaller chunks
+        total_size = len(train_dataset_as_list)
+        
+        # Tokenize in chunks to avoid OOM
+        tokenized_chunks = []
+        for i in range(0, total_size, chunk_size):
+            end_idx = min(i + chunk_size, total_size)
+            print(f"Tokenizing chunk {i//chunk_size + 1}/{(total_size + chunk_size - 1)//chunk_size}: items {i}-{end_idx}")
+            chunk = train_dataset_as_list[i:end_idx]
+            tokenized_chunk = load_tokenized_dataset(chunk, tokenizer, max_length=fmt_opts['max_tokens'])
+            tokenized_chunks.append(tokenized_chunk)
+        
+        # Combine chunks into final dataset
+        from datasets import concatenate_datasets
+        train_dataset_tokenized = concatenate_datasets(tokenized_chunks) if len(tokenized_chunks) > 1 else tokenized_chunks[0]
 
-        # ================================
-        # NEW approach: call the generator
-        # chunked_load_from_rearc(...)
-        # ================================
-        re_arc_path = os.path.join('input/arc-data/ARC-Data/input', 're_arc')
+        print("Final tokenized dataset size:", len(train_dataset_tokenized))
 
         data_collator = SimpleDataCollator(tokenizer)
 
-        # We set up the HF Trainer once, outside the loop, if we want a single global “epoch”.
-        # Alternatively, we can run multiple partial .train() calls inside the loop.
         training_args = TrainingArguments(
             per_device_train_batch_size=1,
             gradient_accumulation_steps=2,
             warmup_ratio=0.25,
-            num_train_epochs=1,     # you can do more if you want 
+            num_train_epochs=1,
             learning_rate=1e-4,
             fp16=not torch.cuda.is_bf16_supported(),
             bf16=torch.cuda.is_bf16_supported(),
-            logging_steps=50,
+            logging_steps=1,
             optim="adamw_8bit",
             weight_decay=0.0,
             lr_scheduler_type='cosine',
@@ -416,50 +312,26 @@ for action in ['train', 'merge']:
             save_strategy='no',
             report_to='none',
             remove_unused_columns=False,
-            ddp_find_unused_parameters=False,
+            ddp_find_unused_parameters=False,  
         )
 
         trainer = Trainer(
             model=model,
             tokenizer=tokenizer,
-            train_dataset=None,  # We'll supply data on the fly
+            train_dataset=train_dataset_tokenized,
             data_collator=data_collator,
             args=training_args,
         )
 
-        # Now we loop over the generator “chunked_load_from_rearc” 
-        # Each yield is a list of text. We'll tokenize, set as trainer dataset, and train.
-        chunk_size = 10000  # or 50k, up to you
-        total_chunks = 0
-        for chunk_idx, chunk_text_list in enumerate(
-            chunked_load_from_rearc(
-                path=re_arc_path,
-                n=16,
-                sizes=[6],
-                seed=42,
-                fmt_opts=fmt_opts,
-                chunk_size=chunk_size,
-            )
-        ):
-            print(f"\n[CHUNK {chunk_idx}] -> Received {len(chunk_text_list)} samples. Tokenizing...")
-            tokenized_chunk = load_tokenized_dataset(chunk_text_list, tokenizer, max_length=fmt_opts['max_tokens'])
+        print("[Trainer] About to call trainer.train() under DDP.")
+        trainer.train()
+        print("[Trainer] Training finished.")
 
-            # Reassign trainer’s train_dataset to this chunk
-            trainer.train_dataset = tokenized_chunk
-
-            # Either do a short .train() call or accumulate. 
-            # If you truly want 1 pass total, set num_train_epochs=1 and let it train “incrementally.” 
-            # Often you’d do “resume_from_checkpoint” or “max_steps” logic. 
-            # Simplest is just to call trainer.train() – which is effectively an epoch over that chunk.
-            trainer.train()
-            total_chunks += 1
-
-        print("[Trainer] All chunks processed. Saving LoRA checkpoint.")
-        # Finally, save
-        save_model_and_tokenizer('pretrained_models/LLama-ReArc-lora', model, tokenizer)
+        save_model_and_tokenizer(f'{save_model_path}-lora', model, tokenizer)
 
     if action == 'merge':
         print("=== Starting MERGE phase ===")
-        model = load_peft_state(model, 'pretrained_models/LLama-ReArc-lora')
+        model = load_peft_state(model, f'{save_model_path}-lora')
         model = merge_peft_into_base(model)
-        save_model_and_tokenizer('pretrained_models/LLama-ReArc-merged', model, tokenizer)
+        save_model_and_tokenizer(f'{save_model_path}-merged', model, tokenizer)
+
