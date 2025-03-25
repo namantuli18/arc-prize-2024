@@ -60,134 +60,47 @@ class ArcDataset(object):
 
 
     @classmethod
-    def load_from_rearc(cls, path, n, sizes, seed, mix_datasets={}, shuffle=True):
-        """
-        Loader for ReArc with reduced memory usage: 
-        reads each file, processes it, then deletes large lists.
-        """
+    def load_from_rearc(cls, path, n, sizes, seed, mix_datasets={}, shuffle=True):  # loader for ReArc
         np.random.seed(seed)
         keys = [[] for _ in range(n)]
         challenge = {}
         solutions = {}
         sizes = list(sizes)
 
-        # 1. Read metadata
         with open(os.path.join(path, 'metadata.json')) as f:
             metadata = json.load(f)
 
-        # 2. Process each .json file in a loop, then delete the large `tasks` 
-        sorted_keys = sorted(metadata.keys())
-        for key in tqdm(sorted_keys, desc="load dataset 're-arc'"):
-            # Load tasks for just this one file
-            json_path = os.path.join(path, 'tasks', f'{key}.json')
-            with open(json_path, 'r') as f:
-                tasks = json.load(f)
+        for key in tqdm(sorted(metadata.keys()), desc="load dataset 're-arc'"):
+            with open(os.path.join(path, 'tasks', f'{key}.json')) as f:
+                tasks = np.random.permutation(json.load(f)).tolist()
 
-            # Shuffle/permute
-            tasks = np.random.permutation(tasks).tolist()
-
-            # Now fill in challenge/solutions
             next_sizes = []
-            while tasks:  # as long as we have tasks left
-                for epoch in range(n):
-                    # Refill next_sizes if it's empty
-                    if not next_sizes:
-                        next_sizes = np.random.permutation(sizes).tolist()
-                    if not tasks:
-                        break  # no more tasks to pop
+            for epoch in range(n):
+                if not len(next_sizes):
+                    next_sizes = np.random.permutation(sizes).tolist()
+                next_size_with_test = 1 + next_sizes.pop()
+                base_key = f'rearc-{key}{epoch:02x}'
+                keys[epoch].append(f'{base_key}_0')
+                challenge[base_key] = {'train': [], 'test': []}
+                solutions[base_key] = reply = []
+                for _ in range(next_size_with_test):
+                    if not len(tasks):
+                        raise RuntimeError('Not enough examples - generate more re-arc examples or reduce epochs.')
+                    challenge[base_key]['train'].append({k: v for k, v in tasks.pop().items()})
+                challenge[base_key]['test'].append(challenge[base_key]['train'].pop())
+                solutions[base_key].append(challenge[base_key]['test'][-1].pop('output'))
 
-                    next_size_with_test = 1 + next_sizes.pop()
-
-                    base_key = f'rearc-{key}{epoch:02x}'
-                    # We only append the first time we see this base_key
-                    # (So we don't repeatedly append the same base_key to keys[epoch].)
-                    if base_key not in challenge:
-                        keys[epoch].append(f'{base_key}_0')
-                        challenge[base_key] = {'train': [], 'test': []}
-                        solutions[base_key] = []
-
-                    # Fill `train`
-                    for _ in range(next_size_with_test):
-                        if not tasks:
-                            raise RuntimeError(
-                                'Not enough examples - generate more re-arc examples or reduce epochs.'
-                            )
-                        example = tasks.pop()
-                        # If there are unneeded fields in example, remove them to save memory
-                        challenge[base_key]['train'].append(example)
-
-                    # Move the last item of `train` to `test`
-                    challenge[base_key]['test'].append(challenge[base_key]['train'].pop())
-                    # Move 'output' out of test item into solutions
-                    last_test_item = challenge[base_key]['test'][-1]
-                    solutions[base_key].append(last_test_item.pop('output'))
-
-            # Delete the large tasks list and force a GC
-            del tasks
-            gc.collect()
-
-        # 3. Integrate optional mix_datasets
         for name, ds in mix_datasets.items():
             name = cls.base_key_replace_invalid_chars(name)
-            # chunk out ds.keys over the n epochs
-            splitted = np.array_split(ds.keys, len(keys))
-            for epoch, ds_keys in enumerate(splitted):
+            for epoch, ds_keys in enumerate(np.array_split(ds.keys, len(keys))):
                 keys[epoch].extend([f'{name}-{k}' for k in ds_keys])
-            for k, v in ds.challenge.items():
-                challenge[f'{name}-{k}'] = v
-            for k, v in ds.solutions.items():
-                solutions[f'{name}-{k}'] = v
+            challenge.update({f'{name}-{k}': v for k, v in ds.challenge.items()})
+            solutions.update({f'{name}-{k}': v for k, v in ds.solutions.items()})
 
-        # 4. Shuffle final keys if desired
         if shuffle:
-            keys = [np.random.permutation(epoch).tolist() for epoch in keys]
-
-        # Flatten list-of-lists of keys
-        keys = [key for epoch_keys in keys for key in epoch_keys]
-
+            keys = [np.random.permutation(epoch) for epoch in keys]
+        keys = [k for epoch in keys for k in epoch]
         return cls(keys=keys, challenge=challenge, solutions=solutions, is_orig=True)
-
-    # def load_from_rearc(cls, path, n, sizes, seed, mix_datasets={}, shuffle=True):  # loader for ReArc
-    #     np.random.seed(seed)
-    #     keys = [[] for _ in range(n)]
-    #     challenge = {}
-    #     solutions = {}
-    #     sizes = list(sizes)
-
-    #     with open(os.path.join(path, 'metadata.json')) as f:
-    #         metadata = json.load(f)
-
-    #     for key in tqdm(sorted(metadata.keys()), desc="load dataset 're-arc'"):
-    #         with open(os.path.join(path, 'tasks', f'{key}.json')) as f:
-    #             tasks = np.random.permutation(json.load(f)).tolist()
-
-    #         next_sizes = []
-    #         for epoch in range(n):
-    #             if not len(next_sizes):
-    #                 next_sizes = np.random.permutation(sizes).tolist()
-    #             next_size_with_test = 1 + next_sizes.pop()
-    #             base_key = f'rearc-{key}{epoch:02x}'
-    #             keys[epoch].append(f'{base_key}_0')
-    #             challenge[base_key] = {'train': [], 'test': []}
-    #             solutions[base_key] = reply = []
-    #             for _ in range(next_size_with_test):
-    #                 if not len(tasks):
-    #                     raise RuntimeError('Not enough examples - generate more re-arc examples or reduce epochs.')
-    #                 challenge[base_key]['train'].append({k: v for k, v in tasks.pop().items()})
-    #             challenge[base_key]['test'].append(challenge[base_key]['train'].pop())
-    #             solutions[base_key].append(challenge[base_key]['test'][-1].pop('output'))
-
-    #     for name, ds in mix_datasets.items():
-    #         name = cls.base_key_replace_invalid_chars(name)
-    #         for epoch, ds_keys in enumerate(np.array_split(ds.keys, len(keys))):
-    #             keys[epoch].extend([f'{name}-{k}' for k in ds_keys])
-    #         challenge.update({f'{name}-{k}': v for k, v in ds.challenge.items()})
-    #         solutions.update({f'{name}-{k}': v for k, v in ds.solutions.items()})
-
-    #     if shuffle:
-    #         keys = [np.random.permutation(epoch) for epoch in keys]
-    #     keys = [k for epoch in keys for k in epoch]
-    #     return cls(keys=keys, challenge=challenge, solutions=solutions, is_orig=True)
 
     # loader for neoneye's format, as used in https://github.com/neoneye/arc-dataset-collection
     @classmethod
@@ -471,3 +384,137 @@ class ArcDataset(object):
                         score += 1 / len(v)
                         break
         return score
+    
+    # =============================
+# BEGIN: New or Modified Lines
+# =============================
+
+import gc
+
+def chunked_load_from_rearc(
+    path,
+    n,
+    sizes,
+    seed,
+    fmt_opts=None,
+    mix_datasets={},
+    shuffle=True,
+    chunk_size=50000
+):
+    """
+    A generator that yields chunks (lists) of text examples,
+    preventing the entire expanded dataset from sitting in memory at once.
+    
+    Each chunk will be a Python list of text strings (or small dicts)
+    up to 'chunk_size' in length.
+    """
+    import numpy as np
+    import json
+    from tqdm import tqdm
+    import os
+    
+    if fmt_opts is None:
+        fmt_opts = dict(
+            preprompt='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjklmnpqrstuvwxyz',
+            query_beg='I',
+            reply_beg='\n+/-=O',
+            reply_end='\n',
+            lines_sep='\n',
+            max_tokens=8192,
+        )
+
+    # Read metadata
+    meta_path = os.path.join(path, 'metadata.json')
+    with open(meta_path) as f:
+        metadata = json.load(f)
+
+    np.random.seed(seed)  # set RNG seed
+    sorted_keys = sorted(metadata.keys())
+
+    chunk_buffer = []
+
+    # We basically replicate some of the logic from load_from_rearc,
+    # but instead of storing everything in a big ArcDataset, we
+    # directly build the formatted text and yield it in chunks.
+    for key in tqdm(sorted_keys, desc="Chunked load from re-arc"):
+        # load tasks
+        json_path = os.path.join(path, 'tasks', f'{key}.json')
+        with open(json_path, 'r') as f:
+            tasks = json.load(f)
+        tasks = np.random.permutation(tasks).tolist()
+
+        next_sizes = []
+        while tasks:
+            for epoch in range(n):  # n times around
+                if not next_sizes:
+                    next_sizes = np.random.permutation(sizes).tolist()
+                if not tasks:
+                    break
+                next_size_with_test = 1 + next_sizes.pop()
+
+                # We'll do the minimal logic:
+                #   "train": [...], "test": [last item], plus "solutions"...
+                # Then we turn them into text. We do a single “train/test” block
+                # for each chunk. If you prefer to generate multiple samples from
+                # the same block (like your original code), you can do so here.
+
+                block_train = []
+                for _ in range(next_size_with_test):
+                    if not tasks:
+                        break
+                    block_train.append(tasks.pop())
+
+                if not block_train:
+                    break
+
+                block_test = [block_train.pop()]  # last item in train becomes test
+                solution = block_test[0].pop('output', None)
+
+                # Build the text with your ARC formatting
+                # (a minimal example; you can replicate your ArcDataset.fmt_task logic)
+                train_text = ""
+                for example in block_train:
+                    train_text += (
+                        fmt_opts['preprompt']
+                        + fmt_opts['query_beg']
+                        + "...some transformation of example['input']..."
+                        + fmt_opts['reply_beg']
+                        + "...some transformation of example['output']..."
+                        + fmt_opts['reply_end']
+                    )
+
+                query_text = (
+                    fmt_opts['preprompt']
+                    + fmt_opts['query_beg']
+                    + "...some transformation of block_test[0]['input']..."
+                    + fmt_opts['reply_beg']
+                )
+                if solution is not None:
+                    query_text += (
+                        "...some transformation of solution..."
+                        + fmt_opts['reply_end']
+                    )
+
+                # This is the final sample we push into the chunk buffer
+                final_text = train_text + query_text
+
+                chunk_buffer.append(final_text)
+
+                # If chunk_buffer is big, yield it and reset
+                if len(chunk_buffer) >= chunk_size:
+                    yield chunk_buffer
+                    chunk_buffer = []
+
+        # done with tasks for this key
+        del tasks
+        gc.collect()
+
+    # If anything remains
+    if chunk_buffer:
+        yield chunk_buffer
+        chunk_buffer = []
+
+# =============================
+# END: New or Modified Lines
+# =============================
+
