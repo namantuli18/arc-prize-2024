@@ -434,7 +434,7 @@ for action in ['train', 'merge']:
         for chunk_idx, chunk_text_list in enumerate(
             chunked_load_from_rearc(
                 path=re_arc_path,
-                n=368,
+                n=16,
                 sizes=[6],
                 seed=42,
                 fmt_opts=fmt_opts,
