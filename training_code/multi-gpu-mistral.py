@@ -100,40 +100,17 @@ def keep_single_char_tokens(model, tokenizer, keep=None, remove_unk=False):
     print(f"Successfully reduced embedding matrix to {len(keep_indices)} tokens.")
     return keep_indices
 
-# def load_tokenized_dataset(dataset_list, tokenizer, max_length=2048):
-#     from datasets import Dataset
-
-#     simple_dataset = []
-#     for item in dataset_list:
-#         if isinstance(item, dict) and 'text' in item:
-#             simple_dataset.append({'raw_text': item['text']})
-    
-#     dataset = Dataset.from_list(simple_dataset)
-
-
-def load_tokenized_dataset(text_list, tokenizer, max_length=2048):
-    """
-    text_list is just a Python list of strings we want to tokenize and wrap in HF Dataset.
-    """
+def load_tokenized_dataset(dataset_list, tokenizer, max_length=2048):
     from datasets import Dataset
-    dataset = Dataset.from_list([{'raw_text': t} for t in text_list])
 
-    def tokenize_function(examples):
-        return tokenizer(
-            examples['raw_text'],
-            padding=False,
-            truncation=True,
-            max_length=max_length,
-            return_tensors=None
-        )
+    simple_dataset = []
+    for item in dataset_list:
+        if isinstance(item, dict) and 'text' in item:
+            simple_dataset.append({'raw_text': item['text']})
+    
+    dataset = Dataset.from_list(simple_dataset)
 
-    tokenized_dataset = dataset.map(
-        tokenize_function,
-        batched=True,
-        remove_columns=['raw_text'],
-        desc="Tokenizing chunk"
-    )
-    return tokenized_dataset
+
     
     def tokenize_function(examples):
         return tokenizer(
