@@ -28,6 +28,10 @@ fmt_opts = dict(
     max_tokens=8192,
 )
 
+# Make sure tokenizer has the right padding settings
+tokenizer.padding_side = 'right'
+tokenizer.pad_token = tokenizer.eos_token
+
 # Create a new PEFT model based on your merged model
 lora_layers = ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj', 'embed_tokens', 'lm_head']
 model = FastLanguageModel.get_peft_model(
@@ -52,17 +56,10 @@ train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=1)
 train_dataset_augment = new_dataset.augment(**train_aug_opts)
 train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
 
-# Print some debug information about the dataset
-print(f"Number of training examples: {len(train_dataset_as_list)}")
-if train_dataset_as_list:
-    print(f"Example text length: {len(train_dataset_as_list[0]['text'])}")
-    print(f"First few characters of example: {train_dataset_as_list[0]['text'][:100]}...")
-
 # Prepare model for training
 FastLanguageModel.for_training(model)
-tokenizer.padding_side = 'right'
 
-# Create a custom data collator that handles the input format correctly
+# Use the original data collator
 data_collator = InputMaskingDataCollator(
     instruction_template=fmt_opts['query_beg'],
     response_template=fmt_opts['reply_beg'],
@@ -71,12 +68,9 @@ data_collator = InputMaskingDataCollator(
     mask_first_n_examples=1,
 )
 
-# Check a sample batch to ensure correct formatting
-sample_dataset = Dataset.from_list(train_dataset_as_list[:2])
-sample_batch = data_collator([sample_dataset[0], sample_dataset[1]])
-print(f"Sample batch keys: {sample_batch.keys()}")
-print(f"Sample batch input_ids shape: {sample_batch['input_ids'].shape}")
-print(f"Sample batch labels shape: {sample_batch['labels'].shape}")
+# Try using a smaller batch size and gradual accumulation
+smaller_batch_size = 2
+larger_grad_accum = 4
 
 # Configure the trainer
 trainer = Trainer(
@@ -85,11 +79,11 @@ trainer = Trainer(
     train_dataset=Dataset.from_list(train_dataset_as_list),
     dataset_text_field="text",
     max_seq_length=fmt_opts['max_tokens'],
-    packing=False,  # Try setting this to False if it was True
+    packing=False,  # Explicitly set to False to avoid any packing-related issues
     data_collator=data_collator,
     args=TrainingArguments(
-        per_device_train_batch_size=4,
-        gradient_accumulation_steps=2,
+        per_device_train_batch_size=smaller_batch_size,
+        gradient_accumulation_steps=larger_grad_accum,
         warmup_ratio=0.25,
         num_train_epochs=1,
         learning_rate=5e-5,
@@ -107,20 +101,48 @@ trainer = Trainer(
     ),
 )
 
-# Try training with the default compute_loss function first
+# Try the normal training method
 try:
-    print("Starting training...")
+    print("Starting training with trainer.train()...")
     trainer_stats = trainer.train()
     print("Training completed successfully!")
 except Exception as e:
-    print(f"Error during training: {e}")
+    print(f"Error during training with trainer.train(): {e}")
     print("Trying with unsloth_train instead...")
     try:
+        # Create a fresh trainer with same settings
+        trainer = Trainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_dataset=Dataset.from_list(train_dataset_as_list),
+            dataset_text_field="text",
+            max_seq_length=fmt_opts['max_tokens'],
+            packing=False,
+            data_collator=data_collator,
+            args=TrainingArguments(
+                per_device_train_batch_size=smaller_batch_size,
+                gradient_accumulation_steps=larger_grad_accum,
+                warmup_ratio=0.25,
+                num_train_epochs=1,
+                learning_rate=5e-5,
+                embedding_learning_rate=5e-6,
+                fp16=not is_bfloat16_supported(),
+                bf16=is_bfloat16_supported(),
+                logging_steps=10,
+                optim="adamw_8bit",
+                weight_decay=0.00,
+                lr_scheduler_type='cosine',
+                seed=43,
+                output_dir='tmp_output',
+                save_strategy='no',
+                report_to='none',
+            ),
+        )
+        # Try unsloth training
         trainer_stats = unsloth_train(trainer)
         print("Training with unsloth_train completed successfully!")
     except Exception as e:
         print(f"Error with unsloth_train: {e}")
-        print("Please check the error message and dataset format")
         raise
 
 # If training succeeds, save the model
