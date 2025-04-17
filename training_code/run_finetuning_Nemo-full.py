@@ -43,7 +43,8 @@ for action in ['train', 'merge']:
 
     # load base model & reduce embedding size
     model = tokenizer = None  # free memory
-    model, tokenizer = load_unsloth_4bit(base_model)
+    model, _ = load_unsloth_4bit(base_model)
+    _, tokenizer = load_unsloth_4bit('nvidia/Mistral-NeMo-Minitron-8B-Base')
     keep_tok = list('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?.:,;*+/-=')+tokenizer.tokenize('\n')
     keep_single_char_tokens(model, tokenizer, keep=keep_tok, remove_unk=True)
 
