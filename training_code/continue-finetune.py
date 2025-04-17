@@ -47,8 +47,8 @@ model = FastLanguageModel.get_peft_model(
 
 # Load your new training data
 # Modify this according to your new data format and source
-new_dataset = ArcDataset.load_from_json(os.path.join(new_data_path, 'arc_challenges.json'))
-new_dataset = new_dataset.load_solutions(os.path.join(new_data_path, 'arc_solutions.json'))
+new_dataset = ArcDataset.load_from_json(os.path.join(new_data_path, 'arc-agi_training_challenges.json'))
+new_dataset = new_dataset.load_solutions(os.path.join(new_data_path, 'arc-agi_training_solutions.json'))
 
 # Augment the new data
 train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=1)
