@@ -102,6 +102,9 @@ for action in ['train', 'merge']:
                 seed=42,
                 output_dir='tmp_output',
                 save_strategy='no',
+                logging_first_step=True,
+                report_to="wandb",
+                run_name=os.environ.get("WANDB_NAME")
                 report_to='none',
             ),
         )
