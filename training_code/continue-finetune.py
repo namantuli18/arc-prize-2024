@@ -105,7 +105,6 @@ for action in ['train', 'merge']:
                 logging_first_step=True,
                 report_to="wandb",
                 run_name=os.environ.get("WANDB_NAME"),
-                report_to='none',
             ),
         )
         trainer_stats = unsloth_train(trainer)
