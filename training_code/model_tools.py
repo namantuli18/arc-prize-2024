@@ -45,7 +45,6 @@ def load_unsloth_4bit(model_path):
         model_name=model_path,
         dtype=None,
         device_map="auto",
-        llm_int8_enable_fp32_cpu_offload=True,
         load_in_4bit=True,
     )
 
