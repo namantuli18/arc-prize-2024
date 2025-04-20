@@ -1,136 +1,115 @@
 import os
-import sys
-from transformers import Trainer, TrainingArguments
-from peft import get_peft_model, LoraConfig, TaskType
+from unsloth import FastLanguageModel
+from unsloth import UnslothTrainer as Trainer, unsloth_train, is_bfloat16_supported
+from unsloth import UnslothTrainingArguments as TrainingArguments
 from datasets import Dataset
+
 from arc_loader import ArcDataset
 from model_tools import InputMaskingDataCollator
 from model_tools import load_unsloth_4bit, keep_single_char_tokens, save_model_and_tokenizer
-from model_tools import merge_peft_into_base
+from model_tools import load_peft_state, merge_peft_into_base
+from arc_downloader import download_arc_data
 
-# This script fixes the column mismatch issue
+save_model_path = os.path.join('pretrained_models', "Mistral-NeMo-Minitron-Full-2025")
+base_model='namannn/arc-nemo_full'
 
-merged_model_path = 'namannn/arc-nemo_full'
-new_data_path = '/kaggle/input/arc-prize-2025'
+arc_data_path='/kaggle/input/arc-prize-2025'
 
-# Output paths for the new training run
-save_model_path = os.path.join('pretrained_models', "Mistral-NeMo-Minitron-Full-continued")
+for action in ['train', 'merge']:
+    # continue if task already accomplished
+    if action == 'train' and os.path.exists(f'{save_model_path}-lora'):
+        continue
+    if action == 'merge' and os.path.exists(f'{save_model_path}-merged'):
+        continue
 
-print("Loading model from", merged_model_path)
-model, tokenizer = load_unsloth_4bit(merged_model_path)
+    model = tokenizer = None
+    model, tokenizer = load_unsloth_4bit(base_model)
+    keep_tok = list('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?.:,;*+/-=')+tokenizer.tokenize('\n')
+    keep_single_char_tokens(model, tokenizer, keep=keep_tok, remove_unk=True)
+    fmt_opts = dict(
+        preprompt='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjklmnpqrstuvwxyz',
+        query_beg='I',
+        reply_beg='\n+/-=O',
+        reply_end='\n' + tokenizer.eos_token,
+        lines_sep='\n',
+        max_tokens=8192,
+    )
 
-# Set formatting options
-fmt_opts = dict(
-    preprompt='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjklmnpqrstuvwxyz',
-    query_beg='I',
-    reply_beg='\n+/-=O',
-    reply_end='\n' + tokenizer.eos_token,
-    lines_sep='\n',
-    max_tokens=8192,
-)
+    lora_layers = ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj', 'embed_tokens', 'lm_head']
+    model = FastLanguageModel.get_peft_model(
+        model=model,
+        target_modules=lora_layers,
+        r=256,
+        lora_alpha=24,
+        lora_dropout=0,
+        bias="none",
+        use_gradient_checkpointing=True,
+        random_state=42,
+        use_rslora=True,
+        loftq_config=None,
+    )
+    if action == 'train':
+        arc_train_set = ArcDataset.load_from_json(os.path.join(arc_data_path, 'arc-agi_training_challenges.json'))
+        arc_train_set = arc_train_set.load_solutions(os.path.join(arc_data_path, 'arc-agi_training_solutions.json'))
 
-# Ensure tokenizer settings are correct
-tokenizer.padding_side = 'right'
-tokenizer.pad_token = tokenizer.eos_token
+        train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
+        train_dataset_augment = arc_train_set.augment(**train_aug_opts)
+        train_dataset_as_list = arc_train_set.as_list(len_name='text', **fmt_opts)
 
-print(f"Tokenizer: {tokenizer.__class__.__name__}")
-print(f"Vocabulary size: {len(tokenizer)}")
-print(f"Model class: {model.__class__.__name__}")
+        MAX_LEN = 2048
 
-print("Creating standard PEFT model")
-peft_config = LoraConfig(
-    task_type=TaskType.CAUSAL_LM,
-    target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-    r=64,
-    lora_alpha=16, 
-    lora_dropout=0.0,
-    bias="none",
-)
+        tokenized_dataset = tokenizer(
+            [x['text'] for x in train_dataset_as_list],
+            return_tensors=None,
+            padding=False,
+            truncation=True,
+            max_length=MAX_LEN,
+        )
+        tokenized_dataset["labels"] = tokenized_dataset["input_ids"].copy()
 
-model = get_peft_model(model, peft_config)
-trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-print(f"Trainable parameters: {trainable_params}")
+        from datasets import Dataset
+        train_dataset = Dataset.from_dict(tokenized_dataset)
 
-print("Loading and preparing dataset")
-# Load your new training data
-new_dataset = ArcDataset.load_from_json(os.path.join(new_data_path, 'arc-agi_training_challenges.json'))
-new_dataset = new_dataset.load_solutions(os.path.join(new_data_path, 'arc-agi_training_solutions.json'))
+        FastLanguageModel.for_training(model)
+        tokenizer.padding_side = 'right'
 
-# Augment the data
-train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=1)
-train_dataset_augment = new_dataset.augment(**train_aug_opts)
-train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
+        trainer = Trainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_dataset=train_dataset,
+            max_seq_length=fmt_opts['max_tokens'],
+            packing=False,
+            data_collator=InputMaskingDataCollator(
+                instruction_template=fmt_opts['query_beg'],
+                response_template=fmt_opts['reply_beg'],
+                mlm=False,
+                tokenizer=tokenizer,
+                mask_first_n_examples=1,
+            ),
+            args=TrainingArguments(
+                per_device_train_batch_size=4,
+                gradient_accumulation_steps=2,
+                warmup_ratio=0.25,
+                num_train_epochs=1,
+                learning_rate=1e-4,
+                embedding_learning_rate=1e-5,
+                fp16=not is_bfloat16_supported(),
+                bf16=is_bfloat16_supported(),
+                logging_steps=10,
+                optim="adamw_8bit",
+                weight_decay=0.00,
+                lr_scheduler_type='cosine',
+                seed=42,
+                output_dir='tmp_output',
+                save_strategy='no',
+                report_to='none',
+            ),
+        )
+        trainer_stats = unsloth_train(trainer)
+        save_model_and_tokenizer(f'{save_model_path}-lora', model, tokenizer)
 
-print(f"Number of training examples: {len(train_dataset_as_list)}")
-if train_dataset_as_list:
-    print(f"Example keys: {list(train_dataset_as_list[0].keys())}")
-    print(f"First example length: {len(train_dataset_as_list[0]['text'])}")
-
-# Use the data collator
-data_collator = InputMaskingDataCollator(
-    instruction_template=fmt_opts['query_beg'],
-    response_template=fmt_opts['reply_beg'],
-    mlm=False,
-    tokenizer=tokenizer,
-    mask_first_n_examples=1,
-)
-
-print("Configuring trainer with remove_unused_columns=False")
-# CRITICAL FIX: Set remove_unused_columns=False
-training_args = TrainingArguments(
-    output_dir='tmp_output',
-    per_device_train_batch_size=2,
-    gradient_accumulation_steps=4,
-    warmup_ratio=0.25,
-    num_train_epochs=1,
-    learning_rate=5e-5,
-    fp16=True,
-    logging_steps=10,
-    optim="adamw_8bit",
-    weight_decay=0.00,
-    lr_scheduler_type='cosine',
-    seed=43,
-    save_strategy='no',
-    report_to='none',
-    remove_unused_columns=False,  # This is the critical fix!
-)
-
-trainer = Trainer(
-    model=model,
-    args=training_args,
-    train_dataset=Dataset.from_list(train_dataset_as_list),
-    data_collator=data_collator,
-    tokenizer=tokenizer,
-)
-
-print("Starting training with standard Trainer")
-try:
-    # Test data collator first to ensure it works
-    print("Testing data collator on a small batch...")
-    sample_batch = data_collator([train_dataset_as_list[0]])
-    print(f"Sample batch keys: {list(sample_batch.keys())}")
-    for key, value in sample_batch.items():
-        if hasattr(value, 'shape'):
-            print(f"{key} shape: {value.shape}")
-    
-    # Now start training
-    trainer_stats = trainer.train()
-    print("Training completed successfully!")
-except Exception as e:
-    print(f"Error during training: {e}", file=sys.stderr)
-    print("\nDEBUGGING INFORMATION:")
-    print(f"Dataset example structure: {list(train_dataset_as_list[0].keys())}")
-    print("Sample of text field:", train_dataset_as_list[0]['text'][:100] + "...")
-    raise
-
-print("Saving model...")
-save_model_and_tokenizer(f'{save_model_path}-lora', model, tokenizer)
-
-# Merge the weights
-try:
-    model = merge_peft_into_base(model)
-    save_model_and_tokenizer(f'{save_model_path}-merged', model, tokenizer)
-    print("Model merged and saved successfully!")
-except Exception as e:
-    print(f"Error during model merging: {e}. Skipping merge step.")
-    print("The LoRA model has been saved successfully and can be used as is.")
+    if action == 'merge':
+        # load peft weights and merge
+        load_peft_state(model, f'{save_model_path}-lora')
+        model = merge_peft_into_base(model)
+        save_model_and_tokenizer(f'{save_model_path}-merged', model, tokenizer)
