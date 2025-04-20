@@ -17,8 +17,8 @@ arc_data_path='/kaggle/input/arc-prize-2025'
 
 for action in ['train', 'merge']:
     # continue if task already accomplished
-    # if action == 'train' and os.path.exists(f'{save_model_path}-lora'):
-    if action == 'train':
+    if action == 'train' and os.path.exists(f'{save_model_path}-lora'):
+    # if action == 'train':
         continue
     if action == 'merge' and os.path.exists(f'{save_model_path}-merged'):
         continue
