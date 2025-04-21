@@ -46,10 +46,10 @@ logger = logging.getLogger(__name__)
 
 # input paths
 base_model = 'nvidia/Mistral-NeMo-Minitron-8B-Base'  # auto-downloaded from huggingface.co
-arc_data_path_1 = os.path.join('input/arc-data/ARC-Data/input', 'arc-prize-2024')  # as on kaggle arc prize 2024
-arc_data_path_2 = os.path.join('input/arc-data/ARC-Data/input', 'arc-prize-2025')
-re_arc_path = os.path.join('input/arc-data/ARC-Data/input', 're_arc')  # https://github.com/michaelhodel/re-arc
-neoneye_path = os.path.join('input/arc-data/ARC-Data/input', 'arc-dataset-collection')  # https://github.com/neoneye/arc-dataset-collection
+arc_data_path_1 = os.path.join('input', 'arc-prize-2024')  # as on kaggle arc prize 2024
+arc_data_path_2 = os.path.join('input', 'arc-prize-2025')
+re_arc_path = os.path.join('input', 're_arc')  # https://github.com/michaelhodel/re-arc
+neoneye_path = os.path.join('input', 'arc-dataset-collection')  # https://github.com/neoneye/arc-dataset-collection
 
 # output paths
 save_model_path = os.path.join('pretrained_models', "Mistral-NeMo-Minitron-Full")
