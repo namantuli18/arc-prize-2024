@@ -335,6 +335,7 @@ def main():
                 report_to='none',
                 seed=42,
                 deepspeed=deepspeed_config,
+                remove_unused_columns=False,
             )
             
             logger.info("Starting training with DeepSpeed")
