@@ -46,7 +46,8 @@ logger = logging.getLogger(__name__)
 
 # input paths
 base_model = 'nvidia/Mistral-NeMo-Minitron-8B-Base'  # auto-downloaded from huggingface.co
-arc_data_path = os.path.join('input/arc-data/ARC-Data/input', 'arc-prize-2024')  # as on kaggle arc prize 2024
+arc_data_path_1 = os.path.join('input/arc-data/ARC-Data/input', 'arc-prize-2024')  # as on kaggle arc prize 2024
+arc_data_path_2 = os.path.join('input/arc-data/ARC-Data/input', 'arc-prize-2025')
 re_arc_path = os.path.join('input/arc-data/ARC-Data/input', 're_arc')  # https://github.com/michaelhodel/re-arc
 neoneye_path = os.path.join('input/arc-data/ARC-Data/input', 'arc-dataset-collection')  # https://github.com/neoneye/arc-dataset-collection
 
@@ -81,7 +82,8 @@ def check_dataset_availability():
     logger.info("Checking dataset availability...")
     
     data_paths = [
-        (arc_data_path, "ARC Prize Dataset"),
+        (arc_data_path_1, "ARC Prize Dataset 2024"),
+        (arc_data_path_2, "ARC Prize Dataset 2025"),
         (re_arc_path, "RE-ARC Dataset"),
         (neoneye_path, "NeonEye Dataset Collection")
     ]
@@ -91,7 +93,13 @@ def check_dataset_availability():
         if os.path.exists(path):
             logger.info(f"✓ {name} found at {path}")
             # Check for specific required files based on the dataset
-            if name == "ARC Prize Dataset":
+            if name == "ARC Prize Dataset 2024":
+                eval_file = os.path.join(path, 'arc-agi_evaluation_challenges.json')
+                solutions_file = os.path.join(path, 'arc-agi_evaluation_solutions.json')
+                if not (os.path.exists(eval_file) and os.path.exists(solutions_file)):
+                    logger.warning(f"⚠ {name} is missing required files")
+                    all_available = False
+            elif name == "ARC Prize Dataset 2025":
                 eval_file = os.path.join(path, 'arc-agi_evaluation_challenges.json')
                 solutions_file = os.path.join(path, 'arc-agi_evaluation_solutions.json')
                 if not (os.path.exists(eval_file) and os.path.exists(solutions_file)):
@@ -239,11 +247,20 @@ def main():
             
             # load training data
             logger.info("Loading and preparing training data")
-            arc_eval_set = ArcDataset.load_from_json(os.path.join(arc_data_path, 'arc-agi_evaluation_challenges.json'))
-            arc_eval_set = arc_eval_set.load_solutions(os.path.join(arc_data_path, 'arc-agi_evaluation_solutions.json'))
+            arc_train_set_1 = ArcDataset.load_from_json(os.path.join(arc_data_path_1, 'arc-agi_training_challenges.json'))
+            arc_train_set_1 = arc_train_set_1.load_solutions(os.path.join(arc_data_path_1, 'arc-agi_training_solutions.json'))
+            arc_train_set_2 = ArcDataset.load_from_json(os.path.join(arc_data_path_2, 'arc-agi_training_challenges.json'))
+            arc_train_set_2 = arc_train_set_2.load_solutions(os.path.join(arc_data_path_2, 'arc-agi_training_solutions.json'))
+            arc_eval_set_1 = ArcDataset.load_from_json(os.path.join(arc_data_path_1, 'arc-agi_evaluation_challenges.json'))
+            arc_eval_set_1 = arc_eval_set_1.load_solutions(os.path.join(arc_data_path_1, 'arc-agi_evaluation_solutions.json'))
+            arc_eval_set_2 = ArcDataset.load_from_json(os.path.join(arc_data_path_2, 'arc-agi_evaluation_challenges.json'))
+            arc_eval_set_2 = arc_eval_set_2.load_solutions(os.path.join(arc_data_path_2, 'arc-agi_evaluation_solutions.json'))
             concept_arc = ArcDataset.load_from_neoneye(os.path.join(neoneye_path, 'dataset', 'ConceptARC'))
             mix_datasets = {
-                'arceval': arc_eval_set.move_test_to_train().repeat(128),
+                'arceval_1': arc_eval_set_1.move_test_to_train().repeat(128),
+                'arceval_2': arc_eval_set_2.move_test_to_train().repeat(128),
+                'arctrain_1': arc_train_set_1.move_test_to_train().repeat(128),
+                'arctrain_2': arc_train_set_2.move_test_to_train().repeat(128),
                 'concept': concept_arc.move_test_to_train().repeat(128),
             }
             train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=644, sizes=[6], seed=42, mix_datasets=mix_datasets)
