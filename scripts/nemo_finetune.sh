@@ -8,7 +8,7 @@
 #SBATCH --chdir=/data/user_data/akhild/Dev/arc-prize-2024        #Working directory
 #SBATCH --cpus-per-task=8                # Number of CPU cores per task
 #SBATCH --mem=200Gb                       # Memory allocation
-#SBATCH --time=70:00:10                   # Time limit (hh:mm:ss)
+#SBATCH --time=70:00:00                   # Time limit (hh:mm:ss)
 #SBATCH --mail-type=ALL                  # Email notifications for all events
 #SBATCH --mail-user=akhild@andrew.cmu.edu  # Email address for notifications
 
