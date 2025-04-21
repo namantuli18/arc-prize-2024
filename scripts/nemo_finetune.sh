@@ -1,8 +1,8 @@
 #!/bin/bash
 
 #SBATCH --job-name=finetune_nemo         # Job name
-#SBATCH --output=finetune_nemo_%j.out   # Standard output (%j = Job ID)
-#SBATCH --error=finetune_nemo_%j.err    # Standard error (%j = Job ID)
+#SBATCH --output=finetune_nemo_arc_2025_%j.out   # Standard output (%j = Job ID)
+#SBATCH --error=finetune_nemo_arc_2025_%j.err    # Standard error (%j = Job ID)
 #SBATCH --partition=general            # Partition with A100 GPUs
 #SBATCH --gres=gpu:A100_40GB:2                     # Request 1 GPU
 #SBATCH --chdir=/data/user_data/akhild/Dev/arc-prize-2024        #Working directory
