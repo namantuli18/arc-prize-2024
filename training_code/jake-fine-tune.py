@@ -255,7 +255,7 @@ def main():
             arc_eval_set_1 = arc_eval_set_1.load_solutions(os.path.join(arc_data_path_1, 'arc-agi_evaluation_solutions.json'))
             # arc_eval_set_2 = ArcDataset.load_from_json(os.path.join(arc_data_path_2, 'arc-agi_evaluation_challenges.json'))
             # arc_eval_set_2 = arc_eval_set_2.load_solutions(os.path.join(arc_data_path_2, 'arc-agi_evaluation_solutions.json'))
-            concept_arc = ArcDataset.load_from_neoneye(os.path.join(neoneye_path, 'dataset', 'ConceptARC'))
+            # concept_arc = ArcDataset.load_from_neoneye(os.path.join(neoneye_path, 'dataset', 'ConceptARC'))
             mix_datasets = {
                 'arceval_1': arc_eval_set_1.move_test_to_train().repeat(10),
                 # 'arceval_1': arc_eval_set_1.move_test_to_train().repeat(128),
@@ -263,7 +263,7 @@ def main():
                 # 'arctrain_1': arc_train_set_1.move_test_to_train().repeat(128),
                 # 'arctrain_2': arc_train_set_2.move_test_to_train().repeat(128),
                 # 'concept': concept_arc.move_test_to_train().repeat(128),
-                'concept': concept_arc.move_test_to_train().repeat(10),
+                # 'concept': concept_arc.move_test_to_train().repeat(10),
             }
             #train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=644, sizes=[6], seed=42, mix_datasets=mix_datasets)
             train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=1, sizes=[6], seed=42, mix_datasets=mix_datasets)
@@ -274,6 +274,7 @@ def main():
             train_dataset_augment = train_dataset.augment(**train_aug_opts)
             train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
             logger.info(f"Prepared {len(train_dataset_as_list)} training examples")
+            print(f"First example: {train_dataset_as_list[0]}")            
 
             # Create DeepSpeed config
             logger.info("Setting up DeepSpeed configuration")
