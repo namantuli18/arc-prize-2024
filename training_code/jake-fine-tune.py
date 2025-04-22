@@ -274,16 +274,6 @@ def main():
             train_dataset_augment = train_dataset.augment(**train_aug_opts)
             train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
 
-            tokenized_train_dataset = tokenizer(
-                [ex['text'] for ex in train_dataset_as_list],
-                padding=True,
-                truncation=True,
-                max_length=8192,
-                return_tensors="pt",
-            )
-
-            tokenized_train_dataset["labels"] = tokenized_train_dataset["input_ids"].clone()
-
             logger.info(f"Prepared {len(train_dataset_as_list)} training examples")
             print(f"First example: {train_dataset_as_list[0]}")            
 
@@ -358,10 +348,9 @@ def main():
                 model=model,
                 args=training_args,
                 # train_dataset=Dataset.from_list(train_dataset_as_list),
-                train_dataset=Dataset.from_dict(tokenized_train_dataset),
+                train_dataset=Dataset.from_list(train_dataset_as_list),
                 data_collator=InputMaskingDataCollator(
                     instruction_template=fmt_opts['query_beg'],
-                    response_template=fmt_opts['reply_beg'],
                     mlm=False,
                     tokenizer=tokenizer,
                     mask_first_n_examples=1,
