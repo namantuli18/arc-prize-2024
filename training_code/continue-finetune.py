@@ -91,7 +91,7 @@ for action in ['train', 'merge']:
                 per_device_train_batch_size=4,
                 gradient_accumulation_steps=2,
                 warmup_ratio=0.25,
-                num_train_epochs=1,
+                num_train_epochs=2,
                 learning_rate=1e-4,
                 embedding_learning_rate=1e-5,
                 fp16=not is_bfloat16_supported(),
