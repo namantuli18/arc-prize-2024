@@ -272,10 +272,28 @@ def main():
             logger.info("Augmenting training data")
             train_aug_opts = dict(tp=True, rt=True, perm=True, shfl_ex=True, seed=0)
             train_dataset_augment = train_dataset.augment(**train_aug_opts)
-            train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
+            # train_dataset_as_list = train_dataset_augment.as_list(len_name='text', **fmt_opts)
 
-            logger.info(f"Prepared {len(train_dataset_as_list)} training examples")
-            print(f"First example: {train_dataset_as_list[0]}")            
+            # First get the raw text samples
+            text_samples = [ex['text'] for ex in train_dataset_augment.as_list(len_name='text', **fmt_opts)]
+
+            # Then convert them to the format expected by the tokenizer
+            def tokenize_function(examples):
+                tokenized = tokenizer(examples['text'], padding=False, truncation=True, max_length=fmt_opts['max_tokens'])
+                return tokenized
+
+            # Create the dataset with the text field
+            raw_dataset = Dataset.from_dict({"text": text_samples})
+
+            # Then tokenize it
+            tokenized_dataset = raw_dataset.map(
+                tokenize_function,
+                batched=True,
+                remove_columns=["text"]
+            )
+
+            # logger.info(f"Prepared {len(train_dataset_as_list)} training examples")
+            # print(f"First example: {train_dataset_as_list[0]}")            
 
             # Create DeepSpeed config
             logger.info("Setting up DeepSpeed configuration")
@@ -348,7 +366,7 @@ def main():
                 model=model,
                 args=training_args,
                 # train_dataset=Dataset.from_list(train_dataset_as_list),
-                train_dataset=Dataset.from_list(train_dataset_as_list),
+                train_dataset=tokenized_dataset,
                 data_collator=InputMaskingDataCollator(
                     instruction_template=fmt_opts['query_beg'],
                     response_template=fmt_opts['reply_beg'],
