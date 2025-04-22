@@ -263,7 +263,8 @@ def main():
                 'arctrain_2': arc_train_set_2.move_test_to_train().repeat(128),
                 'concept': concept_arc.move_test_to_train().repeat(128),
             }
-            train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=644, sizes=[6], seed=42, mix_datasets=mix_datasets)
+            #train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=644, sizes=[6], seed=42, mix_datasets=mix_datasets)
+            train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=1, sizes=[6], seed=42, mix_datasets=mix_datasets)
 
             # augment data set and transform to list
             logger.info("Augmenting training data")
