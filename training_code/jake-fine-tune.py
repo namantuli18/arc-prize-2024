@@ -278,7 +278,7 @@ def main():
                 [ex['text'] for ex in train_dataset_as_list],
                 padding=True,
                 truncation=True,
-                max_length=tokenizer.model_max_length,
+                max_length=8192,
                 return_tensors="pt",
             )
 
