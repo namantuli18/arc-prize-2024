@@ -351,6 +351,7 @@ def main():
                 train_dataset=Dataset.from_list(train_dataset_as_list),
                 data_collator=InputMaskingDataCollator(
                     instruction_template=fmt_opts['query_beg'],
+                    response_template=fmt_opts['reply_beg'],
                     mlm=False,
                     tokenizer=tokenizer,
                     mask_first_n_examples=1,
