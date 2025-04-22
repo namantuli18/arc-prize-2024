@@ -139,8 +139,8 @@ def load_model_and_tokenizer(model_name):
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         quantization_config=quantization_config,
-        torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
-        device_map="auto"
+        torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        # device_map="auto"
     )
     
     # Prepare model for training with 4-bit quantization
@@ -158,8 +158,8 @@ def merge_lora_weights(base_model_path, adapter_path, output_path):
     tokenizer = AutoTokenizer.from_pretrained(base_model_path)
     model = AutoModelForCausalLM.from_pretrained(
         base_model_path,
-        torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
-        device_map="auto"
+        torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        # device_map="auto"
     )
     
     # Load and merge LoRA weights
@@ -247,21 +247,23 @@ def main():
             
             # load training data
             logger.info("Loading and preparing training data")
-            arc_train_set_1 = ArcDataset.load_from_json(os.path.join(arc_data_path_1, 'arc-agi_training_challenges.json'))
-            arc_train_set_1 = arc_train_set_1.load_solutions(os.path.join(arc_data_path_1, 'arc-agi_training_solutions.json'))
-            arc_train_set_2 = ArcDataset.load_from_json(os.path.join(arc_data_path_2, 'arc-agi_training_challenges.json'))
-            arc_train_set_2 = arc_train_set_2.load_solutions(os.path.join(arc_data_path_2, 'arc-agi_training_solutions.json'))
+            # arc_train_set_1 = ArcDataset.load_from_json(os.path.join(arc_data_path_1, 'arc-agi_training_challenges.json'))
+            # arc_train_set_1 = arc_train_set_1.load_solutions(os.path.join(arc_data_path_1, 'arc-agi_training_solutions.json'))
+            # arc_train_set_2 = ArcDataset.load_from_json(os.path.join(arc_data_path_2, 'arc-agi_training_challenges.json'))
+            # arc_train_set_2 = arc_train_set_2.load_solutions(os.path.join(arc_data_path_2, 'arc-agi_training_solutions.json'))
             arc_eval_set_1 = ArcDataset.load_from_json(os.path.join(arc_data_path_1, 'arc-agi_evaluation_challenges.json'))
             arc_eval_set_1 = arc_eval_set_1.load_solutions(os.path.join(arc_data_path_1, 'arc-agi_evaluation_solutions.json'))
-            arc_eval_set_2 = ArcDataset.load_from_json(os.path.join(arc_data_path_2, 'arc-agi_evaluation_challenges.json'))
-            arc_eval_set_2 = arc_eval_set_2.load_solutions(os.path.join(arc_data_path_2, 'arc-agi_evaluation_solutions.json'))
+            # arc_eval_set_2 = ArcDataset.load_from_json(os.path.join(arc_data_path_2, 'arc-agi_evaluation_challenges.json'))
+            # arc_eval_set_2 = arc_eval_set_2.load_solutions(os.path.join(arc_data_path_2, 'arc-agi_evaluation_solutions.json'))
             concept_arc = ArcDataset.load_from_neoneye(os.path.join(neoneye_path, 'dataset', 'ConceptARC'))
             mix_datasets = {
-                'arceval_1': arc_eval_set_1.move_test_to_train().repeat(128),
-                'arceval_2': arc_eval_set_2.move_test_to_train().repeat(128),
-                'arctrain_1': arc_train_set_1.move_test_to_train().repeat(128),
-                'arctrain_2': arc_train_set_2.move_test_to_train().repeat(128),
-                'concept': concept_arc.move_test_to_train().repeat(128),
+                'arceval_1': arc_eval_set_1.move_test_to_train().repeat(10),
+                # 'arceval_1': arc_eval_set_1.move_test_to_train().repeat(128),
+                # 'arceval_2': arc_eval_set_2.move_test_to_train().repeat(128),
+                # 'arctrain_1': arc_train_set_1.move_test_to_train().repeat(128),
+                # 'arctrain_2': arc_train_set_2.move_test_to_train().repeat(128),
+                # 'concept': concept_arc.move_test_to_train().repeat(128),
+                'concept': concept_arc.move_test_to_train().repeat(10),
             }
             #train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=644, sizes=[6], seed=42, mix_datasets=mix_datasets)
             train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=1, sizes=[6], seed=42, mix_datasets=mix_datasets)
