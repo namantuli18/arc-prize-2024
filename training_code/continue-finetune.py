@@ -18,7 +18,6 @@ arc_data_path='/kaggle/input/arc-prize-2025'
 for action in ['train', 'merge']:
     # continue if task already accomplished
     if action == 'train' and os.path.exists(f'{save_model_path}-lora'):
-    # if action == 'train':
         continue
     if action == 'merge' and os.path.exists(f'{save_model_path}-merged'):
         continue
@@ -91,7 +90,7 @@ for action in ['train', 'merge']:
                 per_device_train_batch_size=4,
                 gradient_accumulation_steps=2,
                 warmup_ratio=0.25,
-                num_train_epochs=2,
+                num_train_epochs=4,
                 learning_rate=1e-4,
                 embedding_learning_rate=1e-5,
                 fp16=not is_bfloat16_supported(),
