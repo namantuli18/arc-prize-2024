@@ -50,6 +50,7 @@ arc_data_path_1 = os.path.join('input', 'arc-prize-2024')  # as on kaggle arc pr
 arc_data_path_2 = os.path.join('input', 'arc-prize-2025')
 re_arc_path = os.path.join('input', 're_arc')  # https://github.com/michaelhodel/re-arc
 neoneye_path = os.path.join('input', 'arc-dataset-collection')  # https://github.com/neoneye/arc-dataset-collection
+arc_cdg_path = os.path.join('input', 'arc-cdg')
 
 # output paths
 save_model_path = os.path.join('pretrained_models', "Mistral-NeMo-Minitron-Full")
@@ -85,7 +86,8 @@ def check_dataset_availability():
         (arc_data_path_1, "ARC Prize Dataset 2024"),
         (arc_data_path_2, "ARC Prize Dataset 2025"),
         (re_arc_path, "RE-ARC Dataset"),
-        (neoneye_path, "NeonEye Dataset Collection")
+        (neoneye_path, "NeonEye Dataset Collection"),
+        (arc_cdg_path, "ARC Curriculum Dataset Generated")
     ]
     
     all_available = True
@@ -161,6 +163,10 @@ def merge_lora_weights(base_model_path, adapter_path, output_path):
         torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
         # device_map="auto"
     )
+
+    logger.info("Re-applying embedding size reduction for merging")
+    keep_tok = list('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?.:,;*+/-=') + tokenizer.tokenize('\n')
+    keep_single_char_tokens(model, tokenizer, keep=keep_tok, remove_unk=True)
     
     # Load and merge LoRA weights
     model = PeftModel.from_pretrained(model, adapter_path)
@@ -247,23 +253,30 @@ def main():
             
             # load training data
             logger.info("Loading and preparing training data")
-            # arc_train_set_1 = ArcDataset.load_from_json(os.path.join(arc_data_path_1, 'arc-agi_training_challenges.json'))
-            # arc_train_set_1 = arc_train_set_1.load_solutions(os.path.join(arc_data_path_1, 'arc-agi_training_solutions.json'))
-            # arc_train_set_2 = ArcDataset.load_from_json(os.path.join(arc_data_path_2, 'arc-agi_training_challenges.json'))
-            # arc_train_set_2 = arc_train_set_2.load_solutions(os.path.join(arc_data_path_2, 'arc-agi_training_solutions.json'))
+            arc_train_set_1 = ArcDataset.load_from_json(os.path.join(arc_data_path_1, 'arc-agi_training_challenges.json'))
+            arc_train_set_1 = arc_train_set_1.load_solutions(os.path.join(arc_data_path_1, 'arc-agi_training_solutions.json'))
+
+            arc_train_set_2 = ArcDataset.load_from_json(os.path.join(arc_data_path_2, 'arc-agi_training_challenges.json'))
+            arc_train_set_2 = arc_train_set_2.load_solutions(os.path.join(arc_data_path_2, 'arc-agi_training_solutions.json'))
+            
+            # arc_train_set_3 = ArcDataset.load_from_json(os.path.join(arc_cdg_path, 'arc-cdg_challenges.json'))
+            # arc_train_set_3 = arc_train_set_3.load_solutions(os.path.join(arc_cdg_path, 'arc-cdg_solutions.json'))
+            
             arc_eval_set_1 = ArcDataset.load_from_json(os.path.join(arc_data_path_1, 'arc-agi_evaluation_challenges.json'))
             arc_eval_set_1 = arc_eval_set_1.load_solutions(os.path.join(arc_data_path_1, 'arc-agi_evaluation_solutions.json'))
+            
             # arc_eval_set_2 = ArcDataset.load_from_json(os.path.join(arc_data_path_2, 'arc-agi_evaluation_challenges.json'))
             # arc_eval_set_2 = arc_eval_set_2.load_solutions(os.path.join(arc_data_path_2, 'arc-agi_evaluation_solutions.json'))
-            # concept_arc = ArcDataset.load_from_neoneye(os.path.join(neoneye_path, 'dataset', 'ConceptARC'))
+            concept_arc = ArcDataset.load_from_neoneye(os.path.join(neoneye_path, 'dataset', 'ConceptARC'))
             mix_datasets = {
                 'arceval_1': arc_eval_set_1.move_test_to_train().repeat(10),
-                # 'arceval_1': arc_eval_set_1.move_test_to_train().repeat(128),
+                'arceval_1': arc_eval_set_1.move_test_to_train().repeat(128),
                 # 'arceval_2': arc_eval_set_2.move_test_to_train().repeat(128),
-                # 'arctrain_1': arc_train_set_1.move_test_to_train().repeat(128),
-                # 'arctrain_2': arc_train_set_2.move_test_to_train().repeat(128),
-                # 'concept': concept_arc.move_test_to_train().repeat(128),
-                # 'concept': concept_arc.move_test_to_train().repeat(10),
+                'arctrain_1': arc_train_set_1.move_test_to_train().repeat(128),
+                'arctrain_2': arc_train_set_2.move_test_to_train().repeat(128),
+                # 'arctrain_3': arc_train_set_3.move_test_to_train().repeat(128),
+                'concept': concept_arc.move_test_to_train().repeat(128),
+                'concept': concept_arc.move_test_to_train().repeat(10),
             }
             #train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=644, sizes=[6], seed=42, mix_datasets=mix_datasets)
             train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=1, sizes=[6], seed=42, mix_datasets=mix_datasets)
@@ -329,7 +342,7 @@ def main():
                         "total_num_steps": "auto"
                     }
                 },
-                "gradient_accumulation_steps": 1,  # No need for gradient accumulation with A100
+                "gradient_accumulation_steps": 8,  # No need for gradient accumulation with A100
                 "gradient_clipping": 1.0,
                 "fp16": {
                     "enabled": not torch.cuda.is_bf16_supported(),
@@ -338,7 +351,7 @@ def main():
                     "enabled": torch.cuda.is_bf16_supported(),
                 },
                 "train_batch_size": "auto",
-                "train_micro_batch_size_per_gpu": 8,  # Increased batch size for A100
+                "train_micro_batch_size_per_gpu": 1,  # Increased batch size for A100
             }
 
             # run training with DeepSpeed
@@ -346,8 +359,8 @@ def main():
             training_args = TrainingArguments(
                 output_dir='tmp_output',
                 num_train_epochs=1,
-                per_device_train_batch_size=8,  # Increased to match DeepSpeed config
-                gradient_accumulation_steps=1,  # No need for gradient accumulation
+                per_device_train_batch_size=1,  # Increased to match DeepSpeed config
+                gradient_accumulation_steps=8,  # No need for gradient accumulation
                 warmup_ratio=0.25,
                 learning_rate=1e-4,
                 weight_decay=0.00,
