@@ -46,6 +46,7 @@ def load_unsloth_4bit(model_path):
         dtype=None,
         device_map="auto",
         load_in_4bit=True,
+        trust_remote_code=True,
     )
 
 
