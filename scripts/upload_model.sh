@@ -20,8 +20,8 @@ mkdir -p logs
 # export HF_TOKEN=your_hf_token_here
 
 # Define variables
-MODEL_DIR="pretrained_models/DDP-LLama-ReArc-4GPU-Full_trial_dataset-merged"
-REPO_ID="jakebentley2001/arc-models"  # Replace with your Hugging Face username and desired repo name
+MODEL_DIR="pretrained_models/Mistral-NeMo-Minitron-Full-merged"
+REPO_ID="akhil-dua/arc-models"  # Replace with your Hugging Face username and desired repo name
 COMMIT_MSG="Initial commit of my fine-tuned model"
 
 # Run the upload script

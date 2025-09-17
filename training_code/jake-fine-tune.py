@@ -127,7 +127,8 @@ def load_model_and_tokenizer(model_name):
     
     # Make sure the tokenizer has a pad token
     if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+        logger.info("Tokenizer has no pad_token. Adding <pad>...")
+        tokenizer.add_special_tokens({"pad_token": "<pad>"})
     
     # Configure 4-bit quantization with BitsAndBytesConfig
     quantization_config = BitsAndBytesConfig(
@@ -144,6 +145,8 @@ def load_model_and_tokenizer(model_name):
         torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
         # device_map="auto"
     )
+
+    model.resize_token_embeddings(len(tokenizer))
     
     # Prepare model for training with 4-bit quantization
     model = prepare_model_for_kbit_training(model)
@@ -157,16 +160,25 @@ def merge_lora_weights(base_model_path, adapter_path, output_path):
     start_time = time.time()
     
     # Load the base model and tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(base_model_path)
+    tokenizer = AutoTokenizer.from_pretrained(adapter_path)
+
+    if tokenizer.pad_token is None:
+        logger.info("Adapter tokenizer has no pad_token. Adding <pad> and resizing later...")
+        tokenizer.add_special_tokens({"pad_token": "<pad>"})
+
     model = AutoModelForCausalLM.from_pretrained(
         base_model_path,
         torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
         # device_map="auto"
     )
 
+    model.resize_token_embeddings(len(tokenizer))
+
     logger.info("Re-applying embedding size reduction for merging")
     keep_tok = list('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?.:,;*+/-=') + tokenizer.tokenize('\n')
     keep_single_char_tokens(model, tokenizer, keep=keep_tok, remove_unk=True)
+
+    model.resize_token_embeddings(len(tokenizer))
     
     # Load and merge LoRA weights
     model = PeftModel.from_pretrained(model, adapter_path)
