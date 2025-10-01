@@ -45,7 +45,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # input paths
-base_model = 'nvidia/Mistral-NeMo-Minitron-8B-Base'  # auto-downloaded from huggingface.co
+# base_model = 'nvidia/Mistral-NeMo-Minitron-8B-Base'  # auto-downloaded from huggingface.co
+base_model = 'akhil-dua/baseline_with-cdg-arc'  # auto-downloaded from huggingface.co
 arc_data_path_1 = os.path.join('input', 'arc-prize-2024')  # as on kaggle arc prize 2024
 arc_data_path_2 = os.path.join('input', 'arc-prize-2025')
 re_arc_path = os.path.join('input', 're_arc')  # https://github.com/michaelhodel/re-arc
@@ -87,7 +88,7 @@ def check_dataset_availability():
         (arc_data_path_2, "ARC Prize Dataset 2025"),
         (re_arc_path, "RE-ARC Dataset"),
         (neoneye_path, "NeonEye Dataset Collection"),
-        (arc_cdg_path, "ARC Curriculum Dataset Generated")
+        # (arc_cdg_path, "ARC Curriculum Dataset Generated")
     ]
     
     all_available = True
@@ -265,33 +266,32 @@ def main():
             
             # load training data
             logger.info("Loading and preparing training data")
-            arc_train_set_1 = ArcDataset.load_from_json(os.path.join(arc_data_path_1, 'arc-agi_training_challenges.json'))
-            arc_train_set_1 = arc_train_set_1.load_solutions(os.path.join(arc_data_path_1, 'arc-agi_training_solutions.json'))
+            # arc_train_set_1 = ArcDataset.load_from_json(os.path.join(arc_data_path_1, 'arc-agi_training_challenges.json'))
+            # arc_train_set_1 = arc_train_set_1.load_solutions(os.path.join(arc_data_path_1, 'arc-agi_training_solutions.json'))
 
-            arc_train_set_2 = ArcDataset.load_from_json(os.path.join(arc_data_path_2, 'arc-agi_training_challenges.json'))
-            arc_train_set_2 = arc_train_set_2.load_solutions(os.path.join(arc_data_path_2, 'arc-agi_training_solutions.json'))
+            # arc_train_set_2 = ArcDataset.load_from_json(os.path.join(arc_data_path_2, 'arc-agi_training_challenges.json'))
+            # arc_train_set_2 = arc_train_set_2.load_solutions(os.path.join(arc_data_path_2, 'arc-agi_training_solutions.json'))
             
             # arc_train_set_3 = ArcDataset.load_from_json(os.path.join(arc_cdg_path, 'arc-cdg_challenges.json'))
             # arc_train_set_3 = arc_train_set_3.load_solutions(os.path.join(arc_cdg_path, 'arc-cdg_solutions.json'))
             
-            arc_eval_set_1 = ArcDataset.load_from_json(os.path.join(arc_data_path_1, 'arc-agi_evaluation_challenges.json'))
-            arc_eval_set_1 = arc_eval_set_1.load_solutions(os.path.join(arc_data_path_1, 'arc-agi_evaluation_solutions.json'))
+            # arc_eval_set_1 = ArcDataset.load_from_json(os.path.join(arc_data_path_1, 'arc-agi_evaluation_challenges.json'))
+            # arc_eval_set_1 = arc_eval_set_1.load_solutions(os.path.join(arc_data_path_1, 'arc-agi_evaluation_solutions.json'))
             
             # arc_eval_set_2 = ArcDataset.load_from_json(os.path.join(arc_data_path_2, 'arc-agi_evaluation_challenges.json'))
             # arc_eval_set_2 = arc_eval_set_2.load_solutions(os.path.join(arc_data_path_2, 'arc-agi_evaluation_solutions.json'))
             concept_arc = ArcDataset.load_from_neoneye(os.path.join(neoneye_path, 'dataset', 'ConceptARC'))
-            mix_datasets = {
-                'arceval_1': arc_eval_set_1.move_test_to_train().repeat(10),
-                'arceval_1': arc_eval_set_1.move_test_to_train().repeat(128),
-                # 'arceval_2': arc_eval_set_2.move_test_to_train().repeat(128),
-                'arctrain_1': arc_train_set_1.move_test_to_train().repeat(128),
-                'arctrain_2': arc_train_set_2.move_test_to_train().repeat(128),
-                # 'arctrain_3': arc_train_set_3.move_test_to_train().repeat(128),
-                'concept': concept_arc.move_test_to_train().repeat(128),
-                'concept': concept_arc.move_test_to_train().repeat(10),
+            mix_datasets = {                
+                # 'arceval_1': arc_eval_set_1.move_test_to_train().repeat(128), # train 2
+                # 'arctrain_1': arc_train_set_1.move_test_to_train().repeat(128), # train 1
+                # 'arctrain_2': arc_train_set_2.move_test_to_train().repeat(128), # train 1
+                # 'arctrain_3': arc_train_set_3.move_test_to_train().repeat(128), # train 0
+                'concept': concept_arc.move_test_to_train().repeat(64),     # train 1       
             }
-            #train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=644, sizes=[6], seed=42, mix_datasets=mix_datasets)
-            train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=1, sizes=[6], seed=42, mix_datasets=mix_datasets)
+            train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=322, sizes=[6], seed=42, mix_datasets=mix_datasets)
+            # train_dataset = ArcDataset.load_from_rearc(re_arc_path, n=1, sizes=[6], seed=42, mix_datasets=mix_datasets)
+            # train_dataset = arc_train_set_3.move_test_to_train().repeat(4)
+            # train_dataset = arc_train_set_1.move_test_to_train().repeat(8)            
 
             # augment data set and transform to list
             logger.info("Augmenting training data")

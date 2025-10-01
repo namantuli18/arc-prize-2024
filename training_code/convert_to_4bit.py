@@ -2,9 +2,9 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 # 1. Define model information and repository
-model_id = "akhil-dua/baseline-test" 
+model_id = "akhil-dua/baseline_with-cdg-arc" 
 # Replace with your Hugging Face username and a new repository name
-new_repo_id = "akhil-dua/baseline-test-4bit"
+new_repo_id = "akhil-dua/baseline_with-cdg-arc-4bit"
 
 # 2. Configure 4-bit quantization
 # This configuration defines how the model will be quantized
